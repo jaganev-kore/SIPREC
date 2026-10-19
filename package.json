@@ -1,0 +1,13 @@
+{
+  "name": "kore-agent-assist-siprec-test-src",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node.js test SIPREC recording source with browser microphone uplink",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

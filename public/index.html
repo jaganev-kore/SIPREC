@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Kore.ai Agent Assist • SIPREC Test</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="SIPREC test home">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>Signal<span class="brand-light">Desk</span></span>
+        </a>
+        <div class="topbar-meta">
+          <span class="environment"><span class="environment-dot"></span> AGENT ASSIST / SIPREC</span>
+          <span class="connection" id="connection-status"><span class="status-dot"></span> Loading endpoints</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="eyebrow"><span class="eyebrow-line"></span> KORE.AI VOICE GATEWAY</div>
+        <h1>Check the path<br /><em>to Agent Assist.</em></h1>
+        <p class="hero-copy">Start a one-way microphone test to the Kore Agent Assist SIPREC endpoint. The Node service opens the SIPREC session and streams PCMU audio from this page.</p>
+      </section>
+
+      <section class="panel gateway-panel" aria-labelledby="gateway-title">
+        <div class="panel-heading">
+          <div>
+            <div class="panel-kicker">SIPREC DESTINATIONS</div>
+            <h2 id="gateway-title">Kore.ai SBC endpoints</h2>
+          </div>
+          <div class="record-indicator"><span></span> TLS</div>
+        </div>
+        <div id="endpoints" class="endpoint-grid" aria-live="polite">
+          <div class="endpoint-placeholder">Loading configured SIP URIs…</div>
+        </div>
+        <div class="gateway-meta" id="gateway-meta"></div>
+      </section>
+
+      <section class="panel media-panel" aria-labelledby="media-title">
+        <div class="panel-heading">
+          <div>
+            <div class="panel-kicker">LIVE MICROPHONE TEST</div>
+            <h2 id="media-title">Stream a test session to Kore</h2>
+          </div>
+          <div class="record-indicator"><span></span> SIPREC</div>
+        </div>
+        <p class="media-copy">Start opens a SIPREC recording session from this VM to Kore. After it is accepted, your browser microphone audio is sent as a single PCMU audio stream.</p>
+        <div class="media-form">
+          <label>Participant name<input id="participant-name" value="Web microphone" maxlength="80" autocomplete="off" /></label>
+          <label>Participant SIP URI<input id="participant-uri" value="sip:web-mic@localhost" maxlength="240" autocomplete="off" /></label>
+          <label>SIPREC endpoint<select id="session-endpoint"><option value="primary">Kore SBC 1</option><option value="secondary">Kore SBC 2</option></select></label>
+        </div>
+        <div class="media-controls">
+          <button class="start-button" id="start-session" type="button" disabled>Start SIPREC &amp; microphone</button>
+          <button class="stop-button" id="stop-session" type="button" disabled>Stop session</button>
+          <span class="media-status" id="media-session-status" aria-live="polite">Checking media server configuration…</span>
+        </div>
+        <div class="callout media-callout"><span class="callout-mark">!</span><span>Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.</span></div>
+      </section>
+
+      <section class="workspace explanation-grid">
+        <article class="panel explanation-panel">
+          <div class="panel-kicker">WHAT SIPREC DOES</div>
+          <h2>It sends call audio to Kore for Agent Assist.</h2>
+          <p>A SIPREC Session Recording Client (SRC) on the call’s media path sends the recording session, audio streams, and metadata to Kore. After a supported stream reaches the service, the transcript is available in Kore.ai Agent Assist.</p>
+          <div class="callout"><span class="callout-mark">i</span><span>The live test above sends one browser microphone stream through this VM as a SIPREC session. It does not display the transcript; view that in Kore.ai.</span></div>
+        </article>
+
+        <article class="panel explanation-panel voice-panel">
+          <div class="panel-kicker">TWO-WAY CUSTOMER CONVERSATION</div>
+          <h2>For a spoken answer, use Kore Voice AI.</h2>
+          <p>The SIPREC standard is for recording/replicating media to a recording server; the SRC normally sends audio and the SRS receives it. It does not define a spoken AI response back to the customer.</p>
+          <div class="voice-requirement"><span class="requirement-dot"></span><div><strong>Voice-bot call path</strong><small id="voice-bot-status">No separate Kore voice-bot SIP URI is configured. A SIP/WebRTC media gateway is also required.</small></div></div>
+        </article>
+      </section>
+
+      <section class="panel next-panel">
+        <div>
+          <div class="panel-kicker">NEXT FOR THE SIPREC TRANSCRIPT</div>
+          <h2>Use an SBC for real calls.</h2>
+        </div>
+        <div class="next-steps">
+          <div><span>01</span><p>For production calls, use a SIPREC-capable SBC in the customer and agent call path.</p></div>
+          <div><span>02</span><p>Ask Kore which source IPs and RTP/SRTP ports to allowlist; use a reserved GCP IP for the SRC.</p></div>
+          <div><span>03</span><p>Map the SIPREC identifier, call ID, agent ID, and required metadata in the SRC.</p></div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span>NODE.JS SIPREC TEST SRC <span class="footer-divider">/</span> PCMU AUDIO</span>
+        <span>TEST ONLY <span class="footer-divider">/</span> NO VOICE RETURN PATH</span>
+      </footer>
+    </main>
+  </body>
+</html>
