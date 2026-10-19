@@ -356,9 +356,9 @@ export async function createSiprecSession({
   keyFile,
   logger = () => {},
 }) {
-  if (!publicIp) throw new Error('Set MEDIA_PUBLIC_IP to the VM static external IPv4 address before starting a stream.');
+  if (!publicIp) throw new Error('Set media.publicIp in config.json to the VM static external IPv4 address before starting a stream.');
   if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) {
-    throw new Error('RTP_PORT must be an even UDP port from 1024 through 65534.');
+    throw new Error('media.rtpPort in config.json must be an even UDP port from 1024 through 65534.');
   }
   const target = parseSipUri(uri);
   const tlsFiles = await loadTlsFiles({ caFile, certFile, keyFile });

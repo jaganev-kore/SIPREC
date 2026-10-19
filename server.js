@@ -11,50 +11,34 @@ import { createSiprecSession } from './siprec-src.js';
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(appDirectory, 'public');
 
-async function loadDotEnvFile() {
-  let contents;
+async function loadConfigurationFile() {
   try {
-    contents = await readFile(resolve(appDirectory, '.env'), 'utf8');
+    const contents = await readFile(resolve(appDirectory, 'config.json'), 'utf8');
+    const parsed = JSON.parse(contents);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('config.json must contain a JSON object.');
+    }
+    return { loaded: true, value: parsed };
   } catch (error) {
-    if (error.code === 'ENOENT') return false;
+    if (error.code === 'ENOENT') return { loaded: false, value: {} };
     throw error;
   }
-
-  for (const rawLine of contents.replace(/^\uFEFF/, '').split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-
-    const assignment = line.replace(/^export\s+/, '');
-    const separator = assignment.indexOf('=');
-    if (separator < 1) continue;
-
-    const name = assignment.slice(0, separator).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || process.env[name] !== undefined) continue;
-
-    let value = assignment.slice(separator + 1).trim();
-    const quote = value[0];
-    if ((quote === '"' || quote === "'" || quote === '`') && value.at(-1) === quote) {
-      value = value.slice(1, -1);
-      if (quote === '"') value = value.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
-    } else {
-      value = value.replace(/\s+#.*$/, '').trimEnd();
-    }
-    process.env[name] = value;
-  }
-  return true;
 }
 
-const envFileLoaded = await loadDotEnvFile();
-const host = process.env.HOST || (process.env.K_SERVICE ? '0.0.0.0' : '127.0.0.1');
-const port = Number(process.env.PORT || 3000);
+const loadedConfig = await loadConfigurationFile();
+const appConfig = loadedConfig.value;
+const koreConfig = appConfig.kore && typeof appConfig.kore === 'object' ? appConfig.kore : {};
+const mediaConfig = appConfig.media && typeof appConfig.media === 'object' ? appConfig.media : {};
+const host = typeof appConfig.host === 'string' ? appConfig.host : '127.0.0.1';
+const port = Number(appConfig.port || 3000);
 
 const gateways = [
-  { id: 'primary', label: 'Kore SBC 1', uri: process.env.KORE_SIPREC_PRIMARY_URI || '' },
-  { id: 'secondary', label: 'Kore SBC 2', uri: process.env.KORE_SIPREC_SECONDARY_URI || '' },
+  { id: 'primary', label: 'Kore SBC 1', uri: typeof koreConfig.siprecPrimaryUri === 'string' ? koreConfig.siprecPrimaryUri : '' },
+  { id: 'secondary', label: 'Kore SBC 2', uri: typeof koreConfig.siprecSecondaryUri === 'string' ? koreConfig.siprecSecondaryUri : '' },
 ];
-const mediaPublicIp = process.env.MEDIA_PUBLIC_IP || '';
-const rtpPort = Number(process.env.RTP_PORT || 40000);
-const mediaProfile = process.env.KORE_MEDIA_PROFILE || 'RTP/AVP';
+const mediaPublicIp = typeof mediaConfig.publicIp === 'string' ? mediaConfig.publicIp : '';
+const rtpPort = Number(mediaConfig.rtpPort || 40000);
+const mediaProfile = typeof mediaConfig.profile === 'string' ? mediaConfig.profile : 'RTP/AVP';
 let activeSession = null;
 let sessionStarting = false;
 
@@ -105,9 +89,17 @@ function safeTokenEqual(left, right) {
 
 function parseSipUri(uri) {
   // The supplied Kore URIs use the form sip:user@host:port?headers.
+  if (typeof uri !== 'string' || /[\s<>\r\n]/.test(uri)) return null;
   const match = uri.match(/^sips?:([^@]+)@([^;?:]+)(?::(\d+))?(?:[?;].*)?$/i);
   if (!match) return null;
   return { host: match[2], port: Number(match[3] || 5060) };
+}
+
+function parseKoreSipUri(uri) {
+  if (typeof uri !== 'string' || uri.length > 512) return null;
+  const target = parseSipUri(uri.trim());
+  if (!target || !/(^|\.)kore\.ai$/i.test(target.host) || ![5060, 5061].includes(target.port)) return null;
+  return target;
 }
 
 function probeTls(target) {
@@ -144,18 +136,18 @@ async function handle(req, res) {
   if (req.method === 'GET' && url.pathname === '/api/config') {
     return json(res, 200, {
       product: 'Kore.ai Agent Assist',
-      configSource: envFileLoaded ? '.env + server environment' : 'server environment',
+      configSource: loadedConfig.loaded ? 'config.json' : 'configuration defaults (config.json missing)',
       mediaServerReady: Boolean(isIPv4(mediaPublicIp) && Number.isInteger(rtpPort) && rtpPort >= 1024 && rtpPort <= 65534 && rtpPort % 2 === 0 && mediaProfile === 'RTP/AVP'),
       mediaPublicIp: isIPv4(mediaPublicIp) ? mediaPublicIp : '',
       rtpPort,
       mediaProfile,
       mediaCodec: 'PCMU/8000',
-      sipTransport: process.env.KORE_SIP_TRANSPORT || 'TLS',
-      siprecIdentifier: process.env.KORE_SIPREC_IDENTIFIER || '',
-      dtmf: process.env.KORE_DTMF || 'RFC2833',
-      sipCredentialsConfigured: Boolean(process.env.KORE_SIP_USERNAME && process.env.KORE_SIP_PASSWORD),
+      sipTransport: typeof koreConfig.sipTransport === 'string' ? koreConfig.sipTransport : 'TLS',
+      siprecIdentifier: typeof koreConfig.siprecIdentifier === 'string' ? koreConfig.siprecIdentifier : '',
+      dtmf: typeof koreConfig.dtmf === 'string' ? koreConfig.dtmf : 'RFC2833',
+      sipCredentialsConfigured: Boolean(koreConfig.sipUsername && koreConfig.sipPassword),
       endpoints: gateways.map((gateway) => ({ ...gateway, configured: Boolean(gateway.uri) })),
-      voiceBotConfigured: Boolean(process.env.KORE_VOICE_BOT_SIP_URI),
+      voiceBotConfigured: Boolean(koreConfig.voiceBotSipUri),
     });
   }
 
@@ -163,10 +155,13 @@ async function handle(req, res) {
     if (activeSession || sessionStarting) return json(res, 409, { error: 'A SIPREC test session is already active or starting.' });
     const body = await readJson(req);
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Request body must be a JSON object.' });
-    const endpoint = gateways.find((gateway) => gateway.id === body.endpoint) || gateways[0];
-    if (!endpoint?.uri) return json(res, 400, { error: 'No Kore SIPREC URI is configured.' });
-    if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set MEDIA_PUBLIC_IP to the GCE VM static external IPv4 address.' });
-    if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) return json(res, 400, { error: 'RTP_PORT must be an even UDP port from 1024 through 65534.' });
+    const endpoint = gateways.find((gateway) => gateway.id === body.endpoint);
+    if (!endpoint) return json(res, 400, { error: 'Select a valid Kore SIPREC endpoint.' });
+    const sipUri = String(body.sipUri || endpoint.uri || '').trim();
+    if (!sipUri) return json(res, 400, { error: 'Paste a Kore SIPREC URI into the endpoint field.' });
+    if (!parseKoreSipUri(sipUri)) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061.' });
+    if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCE VM static external IPv4 address.' });
+    if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) return json(res, 400, { error: 'media.rtpPort in config.json must be an even UDP port from 1024 through 65534.' });
     if (mediaProfile !== 'RTP/AVP') {
       return json(res, 400, { error: 'This test source currently sends RTP/AVP only. SRTP must not be enabled until SRTP support is added.' });
     }
@@ -178,15 +173,15 @@ async function handle(req, res) {
     sessionStarting = true;
     try {
       const session = await createSiprecSession({
-        uri: endpoint.uri,
-        siprecIdentifier: process.env.KORE_SIPREC_IDENTIFIER || '',
+        uri: sipUri,
+        siprecIdentifier: typeof koreConfig.siprecIdentifier === 'string' ? koreConfig.siprecIdentifier : '',
         participantName,
         participantUri,
         publicIp: mediaPublicIp,
         rtpPort,
-        caFile: process.env.KORE_TLS_CA_FILE || '',
-        certFile: process.env.KORE_TLS_CERT_FILE || '',
-        keyFile: process.env.KORE_TLS_KEY_FILE || '',
+        caFile: typeof koreConfig.tlsCaFile === 'string' ? koreConfig.tlsCaFile : '',
+        certFile: typeof koreConfig.tlsCertFile === 'string' ? koreConfig.tlsCertFile : '',
+        keyFile: typeof koreConfig.tlsKeyFile === 'string' ? koreConfig.tlsKeyFile : '',
         logger: (message) => console.log(`[siprec] ${message}`),
       });
       const record = { session, endpointId: endpoint.id, token: crypto.randomBytes(32).toString('hex'), ws: null };
@@ -235,9 +230,11 @@ async function handle(req, res) {
       return json(res, 400, { error: 'Request body must be a JSON object' });
     }
     const gateway = gateways.find((candidate) => candidate.id === body.endpoint);
-    if (!gateway?.uri) return json(res, 400, { error: 'That Kore SIPREC endpoint is not configured' });
-    const target = parseSipUri(gateway.uri);
-    if (!target) return json(res, 500, { error: 'Configured SIP URI could not be parsed' });
+    if (!gateway) return json(res, 400, { error: 'Select a valid Kore SIPREC endpoint' });
+    const sipUri = String(body.sipUri || gateway.uri || '').trim();
+    if (!sipUri) return json(res, 400, { error: 'Paste a Kore SIPREC URI into the endpoint field' });
+    const target = parseKoreSipUri(sipUri);
+    if (!target) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061' });
 
     try {
       const result = await probeTls(target);

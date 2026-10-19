@@ -5,6 +5,8 @@ const startSessionButton = document.querySelector('#start-session');
 const stopSessionButton = document.querySelector('#stop-session');
 const mediaSessionStatus = document.querySelector('#media-session-status');
 let activeMediaSession = null;
+let configuredEndpoints = [];
+let serverConfig = null;
 
 function setConnection(ready, message) {
   connectionStatus.classList.toggle('connected', ready);
@@ -25,18 +27,27 @@ function buildEndpointCard(endpoint) {
   name.textContent = endpoint.label;
   const badge = document.createElement('span');
   badge.className = 'endpoint-badge';
-  badge.textContent = endpoint.configured ? 'CONFIGURED' : 'NOT SET';
   heading.append(name, badge);
 
-  const uri = document.createElement('code');
-  uri.className = 'sip-uri';
-  uri.textContent = endpoint.uri || 'Set KORE_SIPREC_PRIMARY_URI / SECONDARY_URI';
+  const uriLabel = document.createElement('label');
+  uriLabel.className = 'endpoint-uri-label';
+  uriLabel.textContent = 'SIPREC URL';
+  const uri = document.createElement('input');
+  uri.className = 'sip-uri-input';
+  uri.type = 'text';
+  uri.autocomplete = 'off';
+  uri.spellcheck = false;
+  const exampleSbc = endpoint.id === 'secondary' ? 'savg-sbc2' : 'savg-sbc1';
+  uri.placeholder = `sip:user@${exampleSbc}.kore.ai:5060?X-agentAssist=tru1`;
+  uri.value = endpoint.uri || '';
+  uri.setAttribute('aria-label', `${endpoint.label} SIPREC URL`);
+  uriLabel.append(uri);
 
   const row = document.createElement('div');
   row.className = 'probe-row';
   const result = document.createElement('p');
   result.className = 'probe-result';
-  result.textContent = endpoint.configured ? 'No TLS check run yet.' : 'Configure the URI in the server environment.';
+  result.textContent = endpoint.uri ? 'No TLS check run yet.' : 'Paste the SIPREC URL to configure this endpoint.';
   result.setAttribute('aria-live', 'polite');
 
   const button = document.createElement('button');
@@ -44,8 +55,9 @@ function buildEndpointCard(endpoint) {
   button.type = 'button';
   button.dataset.endpoint = endpoint.id;
   button.textContent = 'Test TLS path';
-  button.disabled = !endpoint.configured;
+  button.disabled = !endpoint.uri;
   button.addEventListener('click', async () => {
+    if (!endpoint.uri.trim()) return;
     button.disabled = true;
     button.textContent = 'Checking…';
     result.classList.remove('success', 'failure');
@@ -54,7 +66,7 @@ function buildEndpointCard(endpoint) {
       const response = await fetch('/api/probe', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ endpoint: endpoint.id }),
+        body: JSON.stringify({ endpoint: endpoint.id, sipUri: endpoint.uri.trim() }),
       });
       const data = await response.json();
       if (!response.ok || !data.reachable) throw new Error(data.message || data.error || 'TLS check failed');
@@ -64,14 +76,56 @@ function buildEndpointCard(endpoint) {
       result.classList.add('failure');
       result.textContent = error.message || 'Unable to reach Kore over TLS.';
     } finally {
-      button.disabled = false;
+      button.disabled = !endpoint.uri.trim();
       button.textContent = 'Test TLS path';
     }
   });
 
+  uri.addEventListener('input', () => {
+    endpoint.uri = uri.value.trim();
+    try { localStorage.setItem(`kore-siprec-uri:${endpoint.id}`, endpoint.uri); } catch {}
+    badge.textContent = endpoint.uri ? 'URL ADDED' : 'ADD SIPREC URL';
+    button.disabled = !endpoint.uri;
+    result.classList.remove('success', 'failure');
+    result.textContent = endpoint.uri ? 'No TLS check run yet.' : 'Paste the SIPREC URL to configure this endpoint.';
+    updateEndpointReadiness();
+  });
+
   row.append(result, button);
-  card.append(heading, uri, row);
+  card.append(heading, uriLabel, row);
+  badge.textContent = endpoint.uri ? 'URL ADDED' : 'ADD SIPREC URL';
   return card;
+}
+
+function endpointForId(id) {
+  return configuredEndpoints.find((endpoint) => endpoint.id === id);
+}
+
+function updateEndpointReadiness() {
+  const endpointSelect = document.querySelector('#session-endpoint');
+  for (const option of endpointSelect.options) {
+    option.disabled = !endpointForId(option.value)?.uri.trim();
+  }
+  let selectedEndpoint = endpointForId(endpointSelect.value);
+  if (!selectedEndpoint?.uri.trim()) {
+    selectedEndpoint = configuredEndpoints.find((endpoint) => endpoint.uri.trim());
+    if (selectedEndpoint) endpointSelect.value = selectedEndpoint.id;
+  }
+  const selectedUri = selectedEndpoint?.uri?.trim() || '';
+  const configuredCount = configuredEndpoints.filter((endpoint) => endpoint.uri.trim()).length;
+  const mediaReady = Boolean(serverConfig?.mediaServerReady);
+  startSessionButton.disabled = Boolean(activeMediaSession) || !mediaReady || !selectedUri;
+
+  if (!activeMediaSession) {
+    if (!selectedUri) {
+      setMediaStatus('Paste a Kore SIPREC URL above and select that SBC.', 'failure');
+    } else if (!mediaReady) {
+      setMediaStatus('Set media.publicIp to the VM static external IPv4 and keep media.profile=RTP/AVP in config.json.', 'failure');
+    } else {
+      setMediaStatus(`Ready for a single PCMU/8000 stream (${serverConfig.mediaProfile}).`);
+    }
+  }
+  setConnection(configuredCount === 2, `${configuredCount}/2 endpoints configured`);
 }
 
 function setMediaStatus(message, state = '') {
@@ -135,6 +189,7 @@ async function startMediaSession() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         endpoint: document.querySelector('#session-endpoint').value,
+        sipUri: endpointForId(document.querySelector('#session-endpoint').value)?.uri || '',
         participantName: document.querySelector('#participant-name').value,
         participantUri: document.querySelector('#participant-uri').value,
       }),
@@ -185,26 +240,31 @@ async function startMediaSession() {
 
 startSessionButton.addEventListener('click', startMediaSession);
 stopSessionButton.addEventListener('click', stopMediaSession);
+document.querySelector('#session-endpoint').addEventListener('change', updateEndpointReadiness);
 
 async function loadConfig() {
   try {
     const response = await fetch('/api/config');
     if (!response.ok) throw new Error('Configuration endpoint is unavailable.');
     const config = await response.json();
-    endpointsContainer.replaceChildren(...config.endpoints.map(buildEndpointCard));
+    serverConfig = config;
+    configuredEndpoints = config.endpoints.map((endpoint) => {
+      let uri = endpoint.uri || '';
+      try {
+        const savedUri = localStorage.getItem(`kore-siprec-uri:${endpoint.id}`);
+        if (savedUri !== null) uri = savedUri;
+      } catch {}
+      return { ...endpoint, uri };
+    });
+    endpointsContainer.replaceChildren(...configuredEndpoints.map(buildEndpointCard));
     const endpointSelect = document.querySelector('#session-endpoint');
     for (const option of endpointSelect.options) {
-      option.disabled = !config.endpoints.find((endpoint) => endpoint.id === option.value)?.configured;
+      option.disabled = !endpointForId(option.value)?.uri.trim();
     }
-    const firstConfiguredEndpoint = config.endpoints.find((endpoint) => endpoint.configured);
-    if (firstConfiguredEndpoint) endpointSelect.value = firstConfiguredEndpoint.id;
+    const firstConfiguredEndpoint = configuredEndpoints.find((endpoint) => endpoint.uri.trim());
+    if (firstConfiguredEndpoint && !endpointForId(endpointSelect.value)?.uri.trim()) endpointSelect.value = firstConfiguredEndpoint.id;
     document.querySelector('#participant-uri').value = `sip:web-mic@${location.hostname}`;
-    const mediaReady = config.mediaServerReady && Boolean(firstConfiguredEndpoint);
-    startSessionButton.disabled = !mediaReady;
-    setMediaStatus(mediaReady
-      ? `Ready for a single PCMU/8000 stream (${config.mediaProfile}).`
-      : 'Configure a Kore SIPREC URI, set MEDIA_PUBLIC_IP to the VM static external IPv4, and keep KORE_MEDIA_PROFILE=RTP/AVP.',
-      mediaReady ? '' : 'failure');
+    updateEndpointReadiness();
 
     const items = [
       ['Config source', config.configSource || 'Server environment'],
@@ -230,8 +290,6 @@ async function loadConfig() {
       ? 'A separate voice-bot URI is configured, but this test source still sends one-way SIPREC audio only.'
       : 'No separate Kore voice-bot SIP URI is configured. This SIPREC test source does not return spoken AI audio.';
 
-    const configuredCount = config.endpoints.filter((endpoint) => endpoint.configured).length;
-    setConnection(configuredCount === 2, `${configuredCount}/2 endpoints configured`);
   } catch (error) {
     endpointsContainer.textContent = error.message || 'Unable to load Kore endpoint configuration.';
     setConnection(false, 'Configuration unavailable');

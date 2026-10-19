@@ -15,14 +15,17 @@ The SIPREC INVITE includes the standard `Require: siprec`, `;+sip.src` Contact f
 
 ## Configure
 
-Requires Node.js 20 or newer and no npm packages. If `.env` does not exist yet, copy `.env.example` to create it. If it already exists, preserve it and add the missing media settings from `.env.example`. Set `MEDIA_PUBLIC_IP` to the reserved external IPv4 address assigned to the GCE VM. Keep the Kore SIP URIs and SIPREC identifier as provided in the Kore Voice Gateway setup.
+Requires Node.js 20 or newer and no npm packages. The application reads `config.json` in the project root; it no longer reads `.env`. If `config.json` does not exist, copy `config.example.json` to create it, then set `media.publicIp` to the reserved external IPv4 address assigned to the GCE VM. Keep the Kore SIP URIs and SIPREC identifier as provided in the Kore Voice Gateway setup. Protect `config.json` because it can contain SIP credentials and certificate paths.
+
+You can also paste the primary and secondary Kore SIPREC URIs directly into the UI. Those values are saved in that browser's local storage and used immediately; they do not overwrite `config.json` and do not require a Node restart. The server accepts SIPREC URLs only for `kore.ai` hosts on ports 5060 or 5061. Browser-saved URIs take precedence over the corresponding `config.json` URI in that browser.
 
 ```sh
-cp .env.example .env # only when creating .env for the first time
+cp config.example.json config.json # only when creating config.json for the first time
+chmod 600 config.json
 npm start
 ```
 
-`KORE_MEDIA_PROFILE` must remain `RTP/AVP` for this prototype. If Kore has Pad Crypto/SRTP enabled, do not start a test stream; this code does not implement SRTP. `KORE_TLS_CA_FILE`, `KORE_TLS_CERT_FILE`, and `KORE_TLS_KEY_FILE` support optional CA/client-certificate files. Set certificate and key together, using absolute paths. The server already supports certificate-verified TLS 1.2+ to Kore.
+`media.profile` must remain `RTP/AVP` for this prototype. If Kore has Pad Crypto/SRTP enabled, do not start a test stream; this code does not implement SRTP. `kore.tlsCaFile`, `kore.tlsCertFile`, and `kore.tlsKeyFile` support optional CA/client-certificate files. Set certificate and key together, using absolute paths. The server already supports certificate-verified TLS 1.2+ to Kore.
 
 Open the UI over HTTPS on the GCE VM. Browsers require a secure context to grant microphone access (localhost is allowed for local development). For Nginx, proxy WebSocket upgrades as well as regular HTTP requests:
 
@@ -36,7 +39,7 @@ location / {
 }
 ```
 
-Restart Node after changing `.env`. Existing process environment values override `.env` values.
+Restart Node after changing `config.json`.
 
 ## Google Cloud VM network
 
@@ -44,7 +47,7 @@ Use a Compute Engine VM and reserve a static external IPv4 address. Provide that
 
 - Outbound TCP/TLS from the VM to the Kore SIP SBC on port 5060.
 - Outbound UDP from the VM to the RTP destination port returned in Kore's SDP answer.
-- Inbound UDP for RTCP on `RTP_PORT + 1` from Kore's media IP ranges; the default local ports are 40000/40001. Confirm exact IP ranges and firewall direction with Kore.
+- Inbound UDP for RTCP on `media.rtpPort + 1` from Kore's media IP ranges; the default local ports are 40000/40001. Confirm exact IP ranges and firewall direction with Kore.
 - Inbound HTTPS to the UI only from trusted users. Keep Node bound to `127.0.0.1` behind Nginx or another HTTPS proxy, and restrict the GCP firewall. This prototype has no user login.
 
 Google's [static external IP guide](https://docs.cloud.google.com/compute/docs/ip-addresses/configure-static-external-ip-address) covers reserving and assigning the address. Do not assume the free trial covers a VM, disk, static IP, or network usage indefinitely.

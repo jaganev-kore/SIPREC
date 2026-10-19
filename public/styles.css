@@ -49,7 +49,10 @@ h1 em { color: var(--accent); font-style: normal; }
 .endpoint-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .endpoint-heading strong { color: #e8ede8; font-size: 12px; }
 .endpoint-badge { padding: 5px 7px; border: 1px solid #3b493e; border-radius: 3px; color: #b5d99a; font: 500 8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .8px; }
-.sip-uri { display: block; min-height: 40px; margin-top: 14px; padding: 10px; overflow-wrap: anywhere; border-radius: 4px; color: #c6d2c8; background: #101513; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.endpoint-help { margin-top: 12px; color: #9aa59d; font-size: 10px; line-height: 1.5; }
+.endpoint-uri-label { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; color: #9aa59d; font-size: 9px; }
+.sip-uri-input { width: 100%; min-width: 0; height: 40px; padding: 0 10px; border: 1px solid #343d38; border-radius: 4px; outline: none; color: #c6d2c8; background: #101513; font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.sip-uri-input:focus { border-color: #91c16f; box-shadow: 0 0 0 2px rgba(181,242,141,.09); }
 .probe-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
 .probe-result { color: #828e86; font-size: 10px; line-height: 1.5; }
 .probe-result.success { color: #b9dd9d; }

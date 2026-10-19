@@ -1,0 +1,22 @@
+{
+  "host": "127.0.0.1",
+  "port": 3000,
+  "kore": {
+    "siprecPrimaryUri": "sip:YOUR_SIPREC_ID@savg-sbc1.kore.ai:5060?X-agentAssist=tru1",
+    "siprecSecondaryUri": "sip:YOUR_SIPREC_ID@savg-sbc2.kore.ai:5060?X-agentAssist=tru1",
+    "siprecIdentifier": "YOUR_SIPREC_ID",
+    "sipTransport": "TLS",
+    "dtmf": "RFC2833",
+    "sipUsername": "",
+    "sipPassword": "",
+    "voiceBotSipUri": "",
+    "tlsCaFile": "",
+    "tlsCertFile": "",
+    "tlsKeyFile": ""
+  },
+  "media": {
+    "publicIp": "YOUR_GCE_STATIC_EXTERNAL_IPV4",
+    "rtpPort": 40000,
+    "profile": "RTP/AVP"
+  }
+}
