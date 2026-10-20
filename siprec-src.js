@@ -30,7 +30,7 @@ function sipHeaders(raw) {
 function parseSipUri(uri) {
   const match = uri.match(/^sips?:([^@]+)@([^;?:]+)(?::(\d+))?(?:[?;].*)?$/i);
   if (!match) throw new Error('The configured Kore SIP URI is invalid.');
-  return { user: match[1], host: match[2], port: Number(match[3] || 5060) };
+  return { user: match[1], host: match[2], port: Number(match[3] || 5060), secure: /^sips:/i.test(uri) };
 }
 
 function randomTag() {
@@ -122,14 +122,15 @@ function parseSipMessage(packet) {
 }
 
 class SipConnection {
-  constructor(socket, transport) {
+  constructor(socket, transport, remote = null) {
     this.socket = socket;
     this.transport = transport;
+    this.remote = remote;
     this.buffer = '';
     this.messages = [];
     this.waiters = [];
     this.closedError = null;
-    socket.on('data', (chunk) => this.onData(chunk));
+    socket.on(remote ? 'message' : 'data', (chunk) => this.onData(chunk));
     socket.on('error', (error) => this.fail(error));
     socket.on('close', () => {
       this.fail(new Error(`Kore closed the SIP/${this.transport} connection.`));
@@ -141,7 +142,7 @@ class SipConnection {
     this.buffer += chunk.toString('utf8');
     if (Buffer.byteLength(this.buffer) > MAX_SIP_RESPONSE_BYTES) {
       this.fail(new Error('Kore SIP response exceeded the size limit.'));
-      this.socket.destroy();
+      this.close();
       return;
     }
     while (true) {
@@ -168,11 +169,11 @@ class SipConnection {
         if (value) responseHeaders.push(`${name.replace(/(^|-)([a-z])/g, (_, sep, letter) => sep + letter.toUpperCase())}: ${value}`);
       }
       responseHeaders.push('Content-Length: 0', '', '');
-      this.socket.write(responseHeaders.join(CRLF));
+      this.write(responseHeaders.join(CRLF));
       if (method === 'BYE') this.onRemoteBye?.();
       return;
     }
-    this.socket.write('SIP/2.0 501 Not Implemented\r\nContent-Length: 0\r\n\r\n');
+    this.write('SIP/2.0 501 Not Implemented\r\nContent-Length: 0\r\n\r\n');
   }
 
   fail(error) {
@@ -182,8 +183,15 @@ class SipConnection {
   }
 
   write(message) {
-    if (this.closedError || this.socket.destroyed) throw this.closedError || new Error(`SIP/${this.transport} connection is closed.`);
-    this.socket.write(message);
+    if (this.closedError || (!this.remote && this.socket.destroyed)) throw this.closedError || new Error(`SIP/${this.transport} connection is closed.`);
+    if (this.remote) this.socket.send(message);
+    else this.socket.write(message);
+  }
+
+  close() {
+    if (this.remote) {
+      try { this.socket.close(); } catch {}
+    } else this.socket.destroy();
   }
 
   async nextResponse(timeoutMs = 12000) {
@@ -360,12 +368,13 @@ export async function createSiprecSession({
   logger = () => {},
 }) {
   const transport = String(sipTransport).trim().toUpperCase();
-  if (!['TLS', 'TCP'].includes(transport)) throw new Error(`SIP transport ${transport} is not supported. Choose TCP or TLS.`);
+  if (!['TLS', 'TCP', 'UDP'].includes(transport)) throw new Error(`SIP transport ${transport} is not supported. Choose UDP, TCP or TLS.`);
   if (!publicIp) throw new Error('Set media.publicIp in config.json to the VM static external IPv4 address before starting a stream.');
   if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) {
     throw new Error('media.rtpPort in config.json must be an even UDP port from 1024 through 65534.');
   }
   const target = parseSipUri(uri);
+  if (transport === 'UDP' && target.secure) throw new Error('A SIPS URI requires TLS signaling; use a SIP URI for UDP.');
   const tlsFiles = transport === 'TLS' ? await loadTlsFiles({ caFile, certFile, keyFile }) : {};
   const startedAt = new Date();
   const callId = `${crypto.randomUUID()}@${publicIp}`;
@@ -379,7 +388,20 @@ export async function createSiprecSession({
   const sdp = makeSdp(publicIp, rtpPort);
   const mime = makeInviteBody(sdp, metadata);
 
-  const socket = transport === 'TLS'
+  let socket;
+  let udpRemote = null;
+  if (transport === 'UDP') {
+    socket = dgram.createSocket('udp4');
+    udpRemote = { host: target.host, port: target.port };
+    await new Promise((resolve, reject) => {
+      socket.once('error', reject);
+      socket.bind(0, '0.0.0.0', resolve);
+    });
+    await new Promise((resolve, reject) => {
+      socket.once('error', reject);
+      socket.connect(target.port, target.host, resolve);
+    });
+  } else socket = transport === 'TLS'
     ? tls.connect({
       host: target.host,
       port: target.port,
@@ -389,18 +411,20 @@ export async function createSiprecSession({
       ...tlsFiles,
     })
     : net.connect({ host: target.host, port: target.port });
-  const connectedEvent = transport === 'TLS' ? 'secureConnect' : 'connect';
-  const connectTimeout = setTimeout(() => socket.destroy(new Error(`Timed out connecting to Kore over ${transport}.`)), 10000);
-  try {
-    await new Promise((resolve, reject) => {
-      socket.once(connectedEvent, resolve);
-      socket.once('error', reject);
-    });
-  } finally {
-    clearTimeout(connectTimeout);
+  if (transport !== 'UDP') {
+    const connectedEvent = transport === 'TLS' ? 'secureConnect' : 'connect';
+    const connectTimeout = setTimeout(() => socket.destroy(new Error(`Timed out connecting to Kore over ${transport}.`)), 10000);
+    try {
+      await new Promise((resolve, reject) => {
+        socket.once(connectedEvent, resolve);
+        socket.once('error', reject);
+      });
+    } finally {
+      clearTimeout(connectTimeout);
+    }
   }
-  const sip = new SipConnection(socket, transport);
-  logger(`SIP/${transport} connected to ${target.host}:${target.port}`);
+  const sip = new SipConnection(socket, transport, udpRemote);
+  logger(`SIP/${transport} signaling ready for ${target.host}:${target.port}`);
 
   const invite = makeSipRequest({
     transport,
@@ -418,11 +442,30 @@ export async function createSiprecSession({
   let finalResponse;
   try {
     sip.write(invite);
+    let udpRetransmitMs = 500;
+    let gotProvisional = false;
+    const udpDeadline = Date.now() + 32000;
     while (true) {
-      const response = await sip.nextResponse();
+      let response;
+      if (transport === 'UDP') {
+        const remaining = udpDeadline - Date.now();
+        if (remaining <= 0) throw new Error('Timed out waiting for a SIP response from Kore.');
+        const waitMs = gotProvisional ? remaining : Math.min(udpRetransmitMs, remaining);
+        try {
+          response = await sip.nextResponse(waitMs);
+        } catch (error) {
+          if (gotProvisional || !/Timed out waiting/.test(error.message)) throw error;
+          sip.write(invite);
+          udpRetransmitMs = Math.min(udpRetransmitMs * 2, 4000);
+          continue;
+        }
+      } else response = await sip.nextResponse();
       const code = Number(response.first.match(/^SIP\/2\.0\s+(\d+)/i)?.[1]);
       if (!code) continue;
-      if (code < 200) continue;
+      if (code < 200) {
+        gotProvisional = true;
+        continue;
+      }
       finalResponse = response;
       if (code >= 300) {
         const reason = response.first.replace(/^SIP\/2\.0\s+\d+\s*/, '');
@@ -431,14 +474,14 @@ export async function createSiprecSession({
       break;
     }
   } catch (error) {
-    socket.destroy();
+    sip.close();
     throw error;
   }
 
   const responseTo = finalResponse.headers.get('to') || to;
   const remoteTag = responseTo.match(/;\s*tag=([^;\s,]+)/i)?.[1];
   if (!remoteTag) {
-    socket.destroy();
+    sip.close();
     throw new Error('Kore accepted the INVITE without a To tag; the SIP dialog is incomplete.');
   }
   const contactValue = finalResponse.headers.get('contact');
@@ -468,7 +511,7 @@ export async function createSiprecSession({
     remoteMedia = parseSdpAnswer(responseSdp, target.host);
   } catch (error) {
     await sendBye().catch(() => {});
-    socket.destroy();
+    sip.close();
     throw error;
   }
 
@@ -483,7 +526,7 @@ export async function createSiprecSession({
     try { rtpSocket.close(); } catch {}
     try { rtcpSocket.close(); } catch {}
     await sendBye().catch(() => {});
-    socket.destroy();
+    sip.close();
     throw new Error(`Unable to bind RTP/RTCP ports ${rtpPort}/${rtpPort + 1}: ${error.message}`);
   });
 
@@ -527,7 +570,7 @@ export async function createSiprecSession({
       if (ended) return;
       ended = true;
       clearInterval(rtcpTimer);
-      if (!remote && !socket.destroyed) {
+      if (!remote) {
         try {
           await sendBye();
         } catch (error) {
@@ -536,7 +579,7 @@ export async function createSiprecSession({
       }
       rtpSocket.close();
       rtcpSocket.close();
-      socket.destroy();
+      sip.close();
       session.onEnded?.();
     },
   };

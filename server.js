@@ -6,6 +6,8 @@ import { createReadStream } from 'node:fs';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net, { isIPv4 } from 'node:net';
+import dgram from 'node:dgram';
+import { lookup } from 'node:dns/promises';
 import { createSiprecSession } from './siprec-src.js';
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
@@ -93,7 +95,7 @@ function parseSipUri(uri) {
   if (typeof uri !== 'string' || /[\s<>\r\n]/.test(uri)) return null;
   const match = uri.match(/^sips?:([^@]+)@([^;?:]+)(?::(\d+))?(?:[?;].*)?$/i);
   if (!match) return null;
-  return { host: match[2], port: Number(match[3] || 5060) };
+  return { host: match[2], port: Number(match[3] || 5060), secure: /^sips:/i.test(uri) };
 }
 
 function parseKoreSipUri(uri) {
@@ -119,8 +121,20 @@ async function loadTlsOptions() {
 }
 
 function probeSipTransport(target, transport, tlsOptions = {}) {
-  if (!['TLS', 'TCP'].includes(transport)) {
-    return Promise.reject(new Error(`SIP transport ${transport} is not supported. Choose TCP or TLS.`));
+  if (!['TLS', 'TCP', 'UDP'].includes(transport)) {
+    return Promise.reject(new Error(`SIP transport ${transport} is not supported. Choose UDP, TCP or TLS.`));
+  }
+  if (transport === 'UDP') {
+    if (target.secure) return Promise.reject(new Error('A SIPS URI requires TLS signaling; use a SIP URI for UDP.'));
+    return lookup(target.host).then(() => new Promise((resolveProbe, rejectProbe) => {
+      const socket = dgram.createSocket('udp4');
+      const timer = setTimeout(() => socket.close(() => rejectProbe(new Error('UDP socket setup timed out'))), 7000);
+      socket.once('error', (error) => { clearTimeout(timer); rejectProbe(error); });
+      socket.bind(0, '0.0.0.0', () => {
+        clearTimeout(timer);
+        socket.close(() => resolveProbe({ reachable: true, transport, remoteReachabilityVerified: false }));
+      });
+    }));
   }
   return new Promise((resolveProbe, rejectProbe) => {
     const socket = transport === 'TLS'
@@ -183,7 +197,7 @@ async function handle(req, res) {
     const sipUri = String(body.sipUri || endpoint.uri || '').trim();
     if (!sipUri) return json(res, 400, { error: 'Paste a Kore SIPREC URI into the endpoint field.' });
     if (!parseKoreSipUri(sipUri)) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061.' });
-    if (!['TLS', 'TCP'].includes(sipTransport)) return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to TCP or TLS.` });
+    if (!['TLS', 'TCP', 'UDP'].includes(sipTransport)) return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to UDP, TCP or TLS.` });
     if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCE VM static external IPv4 address.' });
     if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) return json(res, 400, { error: 'media.rtpPort in config.json must be an even UDP port from 1024 through 65534.' });
     if (mediaProfile !== 'RTP/AVP') {
@@ -262,15 +276,17 @@ async function handle(req, res) {
     if (!target) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061' });
 
     try {
-      if (!['TLS', 'TCP'].includes(sipTransport)) {
-        return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to TCP or TLS.` });
+      if (!['TLS', 'TCP', 'UDP'].includes(sipTransport)) {
+        return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to UDP, TCP or TLS.` });
       }
       const tlsOptions = sipTransport === 'TLS' ? await loadTlsOptions() : {};
       const result = await probeSipTransport(target, sipTransport, tlsOptions);
       return json(res, 200, {
         endpoint: gateway.id,
         ...result,
-        message: sipTransport === 'TLS'
+        message: sipTransport === 'UDP'
+          ? 'Kore hostname resolved and a local UDP socket opened. UDP has no connection handshake; remote reachability was not verified and no SIP packet was sent.'
+          : sipTransport === 'TLS'
           ? 'TLS handshake succeeded. This does not send SIP signaling, SIPREC metadata, or audio.'
           : 'TCP connection succeeded. This does not send SIP signaling, SIPREC metadata, or audio.',
       });
@@ -281,7 +297,9 @@ async function handle(req, res) {
         error: error.code || error.message || `${sipTransport} connection failed`,
         message: sipTransport === 'TLS'
           ? 'Check DNS, outbound TCP/TLS, Kore IP allowlisting, TLS requirements, and the configured port.'
-          : 'Check DNS, outbound TCP, Kore IP allowlisting, and the configured port.',
+          : sipTransport === 'UDP'
+            ? 'Check DNS, outbound UDP, Kore IP allowlisting, and the configured port.'
+            : 'Check DNS, outbound TCP, Kore IP allowlisting, and the configured port.',
       });
     }
   }

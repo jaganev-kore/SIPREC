@@ -76,7 +76,9 @@ function buildEndpointCard(endpoint) {
       const data = await response.json();
       if (!response.ok || !data.reachable) throw new Error(data.message || data.error || `${transport} check failed`);
       result.classList.add('success');
-      result.textContent = data.transport === 'TLS'
+      result.textContent = data.transport === 'UDP'
+        ? data.message
+        : data.transport === 'TLS'
         ? `TLS ${data.tlsVersion} verified (${data.certificateSubject}). No SIP or media was sent.`
         : 'TCP connection succeeded. No SIP or media was sent.';
     } catch (error) {
@@ -258,7 +260,9 @@ async function loadConfig() {
     document.querySelector('#transport-label').textContent = currentSipTransport();
     document.querySelector('#media-warning').textContent = currentSipTransport() === 'TCP'
       ? 'SIP signaling and SIPREC metadata use unencrypted TCP. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
-      : 'Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.';
+      : currentSipTransport() === 'UDP'
+        ? 'SIP signaling and SIPREC metadata use unencrypted UDP. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
+        : 'Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.';
     configuredEndpoints = config.endpoints.map((endpoint) => {
       let uri = endpoint.uri || '';
       try {
