@@ -469,7 +469,16 @@ export async function createSiprecSession({
       finalResponse = response;
       if (code >= 300) {
         const reason = response.first.replace(/^SIP\/2\.0\s+\d+\s*/, '');
-        throw new Error(`Kore rejected the SIPREC INVITE (${code} ${reason}).${code === 401 || code === 407 ? ' SIP credentials or client-certificate requirements may be missing.' : ''}`);
+        const diagnosticHeaders = ['retry-after', 'warning', 'reason', 'server']
+          .map((name) => {
+            const value = response.headers.get(name);
+            return value ? `${name}: ${value.replace(/[\r\n\u0000-\u001f]+/g, ' ').slice(0, 300)}` : '';
+          })
+          .filter(Boolean);
+        const diagnostic = diagnosticHeaders.length ? ` Response details: ${diagnosticHeaders.join('; ')}.` : '';
+        const authHint = code === 401 || code === 407 ? ' SIP credentials or client-certificate requirements may be missing.' : '';
+        const unavailableHint = code === 503 ? ' Check whether the Kore SIPREC trunk is enabled and available, and confirm the assigned SIP URI, signaling transport, and source-IP allowlist with Kore.' : '';
+        throw new Error(`Kore rejected the SIPREC INVITE (${code} ${reason}).${diagnostic}${authHint}${unavailableHint}`);
       }
       break;
     }
