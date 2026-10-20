@@ -364,7 +364,7 @@ async function googleCloudToken() {
       signal: AbortSignal.timeout(3000),
     });
   } catch {
-    throw new Error('Google Cloud TTS credentials were unavailable. Run this service on GCP with an attached VM service account.');
+    throw new Error('Google Cloud credentials were unavailable. Run this service on GCP with an attached VM service account.');
   }
   if (!response.ok) throw new Error(`GCP metadata token request failed (${response.status}). Check the VM service account and access scopes.`);
   const data = await response.json();
@@ -408,15 +408,17 @@ function readWavPcm(wav) {
   return output;
 }
 
-export async function synthesizeGoogleTts(text, { languageCode = 'en-US', voiceName = '' } = {}) {
+export async function synthesizeGoogleTts(text, { languageCode = 'en-US', voiceName = '', projectId = '', apiUrl = 'https://texttospeech.googleapis.com/v1/text:synthesize' } = {}) {
   const content = String(text || '').trim();
   if (!content || content.length > 2000) throw new Error('Enter text with 1 to 2,000 characters for speech.');
   const accessToken = await googleCloudToken();
   const voice = { languageCode };
   if (voiceName) voice.name = voiceName;
-  const response = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+  const headers = { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' };
+  if (projectId) headers['x-goog-user-project'] = projectId;
+  const response = await fetch(apiUrl, {
     method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({ input: { text: content }, voice, audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 24000, speakingRate: 1 } }),
     signal: AbortSignal.timeout(20000),
   });
@@ -424,4 +426,23 @@ export async function synthesizeGoogleTts(text, { languageCode = 'en-US', voiceN
   if (!response.ok) throw new Error(`Google Cloud TTS failed (${response.status}): ${result.error?.message || 'check the API, service-account role, and selected voice.'}`);
   if (!result.audioContent) throw new Error('Google Cloud TTS returned no audio.');
   return readWavPcm(Buffer.from(result.audioContent, 'base64'));
+}
+
+export async function recognizeGoogleSpeech(pcmuAudio, { languageCode = 'en-US', model = 'phone_call', projectId = '', apiUrl = 'https://speech.googleapis.com/v1/speech:recognize' } = {}) {
+  if (!Buffer.isBuffer(pcmuAudio) || pcmuAudio.length < 8000) return '';
+  const accessToken = await googleCloudToken();
+  const headers = { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' };
+  if (projectId) headers['x-goog-user-project'] = projectId;
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      config: { encoding: 'MULAW', sampleRateHertz: 8000, languageCode, model, enableAutomaticPunctuation: true },
+      audio: { content: pcmuAudio.toString('base64') },
+    }),
+    signal: AbortSignal.timeout(25000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(`Google Cloud Speech-to-Text failed (${response.status}): ${result.error?.message || 'check the API and service-account permissions.'}`);
+  return (result.results || []).map((item) => item.alternatives?.[0]?.transcript || '').filter(Boolean).join(' ').trim();
 }

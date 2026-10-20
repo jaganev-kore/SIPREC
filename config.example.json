@@ -12,11 +12,23 @@
     "voiceBotSipUri": "",
     "voiceGatewayTransport": "UDP",
     "voiceCallerId": "web-caller",
-    "voiceTtsLanguageCode": "en-US",
-    "voiceTtsName": "",
     "tlsCaFile": "",
     "tlsCertFile": "",
     "tlsKeyFile": ""
+  },
+  "googleCloud": {
+    "projectId": "",
+    "textToSpeech": {
+      "apiUrl": "https://texttospeech.googleapis.com/v1/text:synthesize",
+      "languageCode": "en-US",
+      "voiceName": ""
+    },
+    "speechToText": {
+      "enabled": true,
+      "apiUrl": "https://speech.googleapis.com/v1/speech:recognize",
+      "languageCode": "en-US",
+      "model": "phone_call"
+    }
   },
   "media": {
     "publicIp": "YOUR_GCE_STATIC_EXTERNAL_IPV4",

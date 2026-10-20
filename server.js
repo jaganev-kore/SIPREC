@@ -9,7 +9,7 @@ import net, { isIPv4 } from 'node:net';
 import dgram from 'node:dgram';
 import { lookup } from 'node:dns/promises';
 import { createSiprecSession } from './siprec-src.js';
-import { createVoiceGatewaySession, synthesizeGoogleTts } from './voice-gateway.js';
+import { createVoiceGatewaySession, recognizeGoogleSpeech, synthesizeGoogleTts } from './voice-gateway.js';
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(appDirectory, 'public');
@@ -31,6 +31,9 @@ async function loadConfigurationFile() {
 const loadedConfig = await loadConfigurationFile();
 const appConfig = loadedConfig.value;
 const koreConfig = appConfig.kore && typeof appConfig.kore === 'object' ? appConfig.kore : {};
+const googleCloudConfig = appConfig.googleCloud && typeof appConfig.googleCloud === 'object' ? appConfig.googleCloud : {};
+const googleTtsConfig = googleCloudConfig.textToSpeech && typeof googleCloudConfig.textToSpeech === 'object' ? googleCloudConfig.textToSpeech : {};
+const googleSttConfig = googleCloudConfig.speechToText && typeof googleCloudConfig.speechToText === 'object' ? googleCloudConfig.speechToText : {};
 const mediaConfig = appConfig.media && typeof appConfig.media === 'object' ? appConfig.media : {};
 const host = typeof appConfig.host === 'string' ? appConfig.host : '127.0.0.1';
 const port = Number(appConfig.port || 3000);
@@ -46,8 +49,14 @@ const mediaProfile = typeof mediaConfig.profile === 'string' ? mediaConfig.profi
 const voiceGatewayUri = typeof koreConfig.voiceBotSipUri === 'string' ? koreConfig.voiceBotSipUri : '';
 const voiceGatewayTransport = String(koreConfig.voiceGatewayTransport || 'UDP').trim().toUpperCase();
 const voiceGatewayRtpPort = Number(mediaConfig.voiceGatewayRtpPort || 42000);
-const voiceTtsLanguageCode = typeof koreConfig.voiceTtsLanguageCode === 'string' ? koreConfig.voiceTtsLanguageCode : 'en-US';
-const voiceTtsName = typeof koreConfig.voiceTtsName === 'string' ? koreConfig.voiceTtsName : '';
+const voiceTtsLanguageCode = typeof googleTtsConfig.languageCode === 'string' ? googleTtsConfig.languageCode : (typeof koreConfig.voiceTtsLanguageCode === 'string' ? koreConfig.voiceTtsLanguageCode : 'en-US');
+const voiceTtsName = typeof googleTtsConfig.voiceName === 'string' ? googleTtsConfig.voiceName : (typeof koreConfig.voiceTtsName === 'string' ? koreConfig.voiceTtsName : '');
+const googleTtsApiUrl = typeof googleTtsConfig.apiUrl === 'string' ? googleTtsConfig.apiUrl : 'https://texttospeech.googleapis.com/v1/text:synthesize';
+const speechLanguageCode = typeof googleSttConfig.languageCode === 'string' ? googleSttConfig.languageCode : (typeof koreConfig.speechLanguageCode === 'string' ? koreConfig.speechLanguageCode : 'en-US');
+const speechModel = typeof googleSttConfig.model === 'string' ? googleSttConfig.model : (typeof koreConfig.speechModel === 'string' ? koreConfig.speechModel : 'phone_call');
+const speechToTextEnabled = googleSttConfig.enabled === undefined ? koreConfig.speechToTextEnabled !== false : googleSttConfig.enabled !== false;
+const googleSttApiUrl = typeof googleSttConfig.apiUrl === 'string' ? googleSttConfig.apiUrl : 'https://speech.googleapis.com/v1/speech:recognize';
+const googleCloudProjectId = typeof googleCloudConfig.projectId === 'string' ? googleCloudConfig.projectId : (typeof koreConfig.googleCloudProjectId === 'string' ? koreConfig.googleCloudProjectId : '');
 let activeSession = null;
 let sessionStarting = false;
 let activeVoiceSession = null;
@@ -96,6 +105,16 @@ function safeTokenEqual(left, right) {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function validGoogleApiUrl(value, service) {
+  let parsed;
+  try { parsed = new URL(String(value)); } catch { return false; }
+  const allowedHost = service === 'tts'
+    ? /^(?:[a-z0-9-]+-)?texttospeech\.googleapis\.com$/i.test(parsed.hostname)
+    : /^(?:[a-z0-9-]+-)?speech\.googleapis\.com$/i.test(parsed.hostname);
+  const expectedPath = service === 'tts' ? '/v1/text:synthesize' : '/v1/speech:recognize';
+  return parsed.protocol === 'https:' && allowedHost && (!parsed.port || parsed.port === '443') && parsed.pathname === expectedPath && !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
 }
 
 function parseSipUri(uri) {
@@ -198,6 +217,12 @@ async function handle(req, res) {
       voiceGatewayRtpPort,
       voiceTtsLanguageCode,
       voiceTtsName,
+      googleTtsApiUrl,
+      speechLanguageCode,
+      speechModel,
+      speechToTextEnabled,
+      googleSttApiUrl,
+      googleCloudProjectId,
     });
   }
 
@@ -211,6 +236,19 @@ async function handle(req, res) {
     if (!['UDP', 'TCP', 'TLS'].includes(voiceGatewayTransport)) return json(res, 400, { error: 'kore.voiceGatewayTransport must be UDP, TCP, or TLS.' });
     if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCP VM static external IPv4 address.' });
     if (!Number.isInteger(voiceGatewayRtpPort) || voiceGatewayRtpPort < 1024 || voiceGatewayRtpPort > 65534 || voiceGatewayRtpPort % 2) return json(res, 400, { error: 'media.voiceGatewayRtpPort must be an even UDP port from 1024 through 65534.' });
+    const selectedSpeechLanguage = String(body.speechLanguageCode || speechLanguageCode).trim();
+    const selectedSpeechModel = String(body.speechModel || speechModel).trim();
+    const selectedProjectId = String(body.googleCloudProjectId || googleCloudProjectId).trim();
+    const selectedSttApiUrl = String(body.googleSttApiUrl || googleSttApiUrl).trim();
+    const selectedTtsApiUrl = String(body.googleTtsApiUrl || googleTtsApiUrl).trim();
+    if (!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(selectedSpeechLanguage)) return json(res, 400, { error: 'Enter a valid BCP-47 Speech-to-Text language code, such as en-US.' });
+    if (!['phone_call', 'default', 'latest_short', 'latest_long'].includes(selectedSpeechModel)) return json(res, 400, { error: 'Choose a supported Speech-to-Text model.' });
+    if (selectedProjectId && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(selectedProjectId)) return json(res, 400, { error: 'Enter a valid Google Cloud project ID.' });
+    if (!validGoogleApiUrl(selectedSttApiUrl, 'stt')) return json(res, 400, { error: 'Speech-to-Text URL must be an HTTPS Google Speech API URL ending in /v1/speech:recognize.' });
+    if (!validGoogleApiUrl(selectedTtsApiUrl, 'tts')) return json(res, 400, { error: 'Text-to-Speech URL must be an HTTPS Google Text-to-Speech API URL ending in /v1/text:synthesize.' });
+    const selectedTtsLanguage = String(body.voiceTtsLanguageCode || voiceTtsLanguageCode).trim();
+    const selectedTtsName = String(body.voiceTtsName || voiceTtsName).trim().slice(0, 128);
+    if (!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(selectedTtsLanguage)) return json(res, 400, { error: 'Enter a valid BCP-47 Text-to-Speech language code, such as en-US.' });
     voiceSessionStarting = true;
     try {
       const session = await createVoiceGatewaySession({
@@ -221,10 +259,26 @@ async function handle(req, res) {
         callerId: typeof koreConfig.voiceCallerId === 'string' ? koreConfig.voiceCallerId : (koreConfig.siprecIdentifier || 'web-caller'),
         logger: (message) => console.log(`[voice] ${message}`),
       });
-      const record = { session, token: crypto.randomBytes(32).toString('hex'), ws: null };
+      const record = {
+        session,
+        token: crypto.randomBytes(32).toString('hex'),
+        ws: null,
+        speechLanguageCode: selectedSpeechLanguage,
+        speechModel: selectedSpeechModel,
+        googleCloudProjectId: selectedProjectId,
+        googleSttApiUrl: selectedSttApiUrl,
+        googleTtsApiUrl: selectedTtsApiUrl,
+        speechToTextEnabled: body.speechToTextEnabled === undefined ? speechToTextEnabled : body.speechToTextEnabled === true,
+        voiceTtsLanguageCode: selectedTtsLanguage,
+        voiceTtsName: selectedTtsName,
+        callerAudio: [],
+        gatewayAudio: [],
+        pendingTranscripts: [],
+      };
       activeVoiceSession = record;
       record.pendingAudio = [];
       session.onAudio = (frame) => {
+        if (record.speechToTextEnabled) record.gatewayAudio.push(Buffer.from(frame));
         if (record.ws && !record.ws.destroyed && !record.ws.writableEnded) record.ws.write(websocketBinaryFrame(frame));
         else {
           record.pendingAudio.push(Buffer.from(frame));
@@ -237,8 +291,11 @@ async function handle(req, res) {
           record.session.stop().catch((error) => console.error(`[voice] cleanup after media connection timeout failed: ${error.message}`));
         }
       }, 20000);
-      session.onEnded = () => {
+      record.transcriptionTimer = setInterval(() => flushVoiceTranscription(record), 8000);
+      session.onEnded = async () => {
         clearTimeout(record.connectTimer);
+        clearInterval(record.transcriptionTimer);
+        await flushVoiceTranscription(record);
         if (activeVoiceSession === record) activeVoiceSession = null;
         if (record.ws && !record.ws.destroyed && !record.ws.writableEnded) record.ws.end(Buffer.from([0x88, 0x00]));
       };
@@ -256,6 +313,8 @@ async function handle(req, res) {
     if (!activeVoiceSession) return json(res, 200, { stopped: true });
     if (!safeTokenEqual(body.streamToken, activeVoiceSession.token)) return json(res, 403, { error: 'Invalid Voice Gateway session token.' });
     const record = activeVoiceSession;
+    clearInterval(record.transcriptionTimer);
+    await flushVoiceTranscription(record);
     activeVoiceSession = null;
     if (record.ws && !record.ws.destroyed) record.ws.end(Buffer.from([0x88, 0x00]));
     await record.session.stop();
@@ -267,7 +326,7 @@ async function handle(req, res) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Request body must be a JSON object.' });
     if (!activeVoiceSession || !safeTokenEqual(body.streamToken, activeVoiceSession.token)) return json(res, 403, { error: 'Start a Voice Gateway call before sending speech.' });
     try {
-      const audio = await synthesizeGoogleTts(body.text, { languageCode: voiceTtsLanguageCode, voiceName: voiceTtsName });
+      const audio = await synthesizeGoogleTts(body.text, { languageCode: activeVoiceSession.voiceTtsLanguageCode, voiceName: activeVoiceSession.voiceTtsName, projectId: activeVoiceSession.googleCloudProjectId, apiUrl: activeVoiceSession.googleTtsApiUrl });
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': audio.length, 'cache-control': 'no-store', 'x-audio-sample-rate': '8000', 'x-audio-format': 's16le-mono' });
       return res.end(audio);
     } catch (error) {
@@ -436,6 +495,50 @@ function websocketBinaryFrame(payload) {
   return Buffer.concat([header, payload]);
 }
 
+function websocketTextFrame(value) {
+  const payload = Buffer.from(JSON.stringify(value));
+  if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
+  if (payload.length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x81;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(payload.length), 2);
+  return Buffer.concat([header, payload]);
+}
+
+function flushVoiceTranscription(record) {
+  if (!record.speechToTextEnabled || !activeVoiceSession || activeVoiceSession !== record) return;
+  const requests = [];
+  for (const [speaker, key] of [['caller', 'callerAudio'], ['kore', 'gatewayAudio']]) {
+    const chunks = record[key].splice(0);
+    if (!chunks.length) continue;
+    const audio = Buffer.concat(chunks);
+    requests.push(recognizeGoogleSpeech(audio, { languageCode: record.speechLanguageCode, model: record.speechModel, projectId: record.googleCloudProjectId, apiUrl: record.googleSttApiUrl })
+      .then((transcript) => {
+        if (!transcript || activeVoiceSession !== record) return;
+        const message = { type: 'transcript', speaker, text: transcript, timestamp: new Date().toISOString() };
+        if (record.ws && !record.ws.destroyed && !record.ws.writableEnded) record.ws.write(websocketTextFrame(message));
+        else {
+          record.pendingTranscripts.push(message);
+          if (record.pendingTranscripts.length > 100) record.pendingTranscripts.shift();
+        }
+      })
+      .catch((error) => {
+        console.error(`[voice] ${speaker} transcription failed: ${error.message}`);
+        if (activeVoiceSession === record && record.ws && !record.ws.destroyed && !record.ws.writableEnded) {
+          record.ws.write(websocketTextFrame({ type: 'transcription-error', message: error.message }));
+        }
+      }));
+  }
+  return Promise.allSettled(requests);
+}
+
 function acceptVoiceWebSocket(req, socket, head, requestUrl) {
   const origin = req.headers.origin;
   let originMatchesHost = false;
@@ -453,6 +556,7 @@ function acceptVoiceWebSocket(req, socket, head, requestUrl) {
   socket.setNoDelay(true);
   clearTimeout(record.connectTimer);
   record.ws = socket;
+  for (const transcript of record.pendingTranscripts.splice(0)) socket.write(websocketTextFrame(transcript));
   for (const frame of record.pendingAudio.splice(0)) socket.write(websocketBinaryFrame(frame));
   let pending = head || Buffer.alloc(0);
   const closeWithCode = (code) => {
@@ -491,6 +595,7 @@ function acceptVoiceWebSocket(req, socket, head, requestUrl) {
       if (opcode === 0x8) { socket.end(Buffer.from([0x88, 0x00])); return; }
       if (opcode === 0x9) { socket.write(Buffer.concat([Buffer.from([0x8a, payload.length]), payload])); continue; }
       if (opcode !== 0x2 || payload.length !== 160) return closeWithCode(1003);
+      if (record.speechToTextEnabled) record.callerAudio.push(Buffer.from(payload));
       record.session.sendAudio(payload);
     }
   };

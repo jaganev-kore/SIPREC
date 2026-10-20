@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>SignalDesk • Two-way Voice</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/voice-app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="SIPREC home"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>Signal<span class="brand-light">Desk</span></span></a>
+        <div class="topbar-meta"><span class="environment"><span class="environment-dot"></span> KORE VOICE GATEWAY</span><a class="page-link" href="/">SIPREC page</a></div>
+      </header>
+
+      <section class="hero">
+        <div class="eyebrow"><span class="eyebrow-line"></span> TWO-WAY VOICE AI</div>
+        <h1>Talk with<br /><em>Kore voice.</em></h1>
+        <p class="hero-copy">Call the Kore Voice Gateway, speak through your microphone, hear Kore’s response, and view transcripts for both sides of the call. Kore automation controls agent transfer.</p>
+      </section>
+
+      <section class="panel voice-call-panel" aria-labelledby="voice-call-title">
+        <div class="panel-heading"><div><div class="panel-kicker">VOICE GATEWAY SIP CALL</div><h2 id="voice-call-title">Call controls</h2></div><div class="record-indicator"><span></span> PCMU / 8000</div></div>
+        <div class="voice-gateway-form">
+          <label>Kore Voice Gateway SIP URL<input id="voice-gateway-uri" type="text" autocomplete="off" spellcheck="false" placeholder="sip:assigned-id@gateway.kore.ai:5060" /></label>
+        </div>
+        <div class="media-controls">
+          <button class="start-button" id="voice-call-start" type="button">Call Voice Gateway</button>
+          <button class="stop-button" id="voice-call-stop" type="button" disabled>End call</button>
+          <span class="media-status" id="voice-call-status" aria-live="polite">Configure the Kore Voice Gateway SIP URI to start.</span>
+        </div>
+        <div class="callout media-callout"><span class="callout-mark">i</span><span>This call uses microphone audio only. The former “send text” control has been removed. Google TTS settings are shown below; Kore supplies the spoken audio during this SIP call.</span></div>
+      </section>
+
+      <section class="panel transcript-panel" aria-labelledby="transcript-title">
+        <div class="panel-heading"><div><div class="panel-kicker">LIVE SPEECH-TO-TEXT</div><h2 id="transcript-title">Call transcript</h2></div><button class="probe-button" id="clear-transcript" type="button">Clear transcript</button></div>
+        <p class="endpoint-help" id="transcript-status">Transcript will appear here after the call starts. Recognition runs in short audio batches.</p>
+        <ol class="transcript-list" id="transcript-list" aria-live="polite"><li class="transcript-empty">No transcript yet.</li></ol>
+      </section>
+
+      <details class="panel google-config-panel" open>
+        <summary><span><span class="panel-kicker">GOOGLE CLOUD</span><strong>Speech and voice settings</strong></span><span class="record-indicator">CONFIG</span></summary>
+        <div class="google-config-grid">
+          <label>Google Cloud project ID<input id="google-project-id" type="text" autocomplete="off" placeholder="your-gcp-project-id" /></label>
+          <label>Credentials source<select id="google-credentials-source"><option value="metadata">GCE VM service account (recommended)</option></select></label>
+          <label class="check-setting"><span>Live transcripts<input id="speech-enabled" type="checkbox" checked /></span><small>Transcribe both speakers during the call</small></label>
+          <label>Speech-to-Text language<input id="speech-language" type="text" value="en-US" placeholder="en-US" /></label>
+          <label>Speech-to-Text model<select id="speech-model"><option value="phone_call">Phone call</option><option value="default">Default</option><option value="latest_short">Latest short</option><option value="latest_long">Latest long</option></select></label>
+          <label>Google Speech-to-Text API URL<input id="google-stt-url" type="url" autocomplete="off" /></label>
+          <label>Google TTS language<input id="tts-language" type="text" value="en-US" placeholder="en-US" /></label>
+          <label>Google TTS voice name<input id="tts-voice" type="text" placeholder="Optional, for example en-US-Neural2-F" /></label>
+          <label>Google Text-to-Speech API URL<input id="google-tts-url" type="url" autocomplete="off" /></label>
+        </div>
+        <p class="endpoint-help">Enable Cloud Speech-to-Text and Cloud Text-to-Speech APIs in this project. Attach a service account with API access to the VM and grant it the required API permissions. The private key stays on the server; do not paste it into this page. Speech-to-Text recognizes both your microphone audio and Kore’s returned audio. TTS configuration is retained for Google TTS use; the removed text-to-call control no longer sends synthesized audio into the call.</p>
+      </details>
+
+      <footer class="footer"><span>KORE VOICE GATEWAY <span class="footer-divider">/</span> TWO-WAY AUDIO</span><span>GOOGLE CLOUD SPEECH-TO-TEXT</span></footer>
+    </main>
+  </body>
+</html>

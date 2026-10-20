@@ -27,6 +27,8 @@ button, input, select { font: inherit; }
 .brand-mark span:nth-child(2) { height: 20px; }
 .brand-mark span:nth-child(3) { height: 14px; opacity: .82; }
 .topbar-meta { display: flex; gap: 26px; align-items: center; }
+.page-link { color: #b5f28d; font-size: 10px; text-decoration: none; white-space: nowrap; }
+.page-link:hover { color: #d5ffc1; text-decoration: underline; }
 .environment, .connection, .panel-kicker, .required, .optional, .record-indicator, .flow-state, .event-heading, .footer { font: 500 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 1.15px; }
 .environment { color: #8c9891; }
 .connection { color: #f2be74; letter-spacing: .35px; font-size: 11px; text-transform: none; display: flex; gap: 8px; align-items: center; }
@@ -72,6 +74,26 @@ h1 em { color: var(--accent); font-style: normal; }
 .voice-gateway-form input, .voice-gateway-form textarea { width: 100%; min-width: 0; padding: 10px; border: 1px solid #343d38; border-radius: 4px; outline: none; color: #e9eee8; background: #111614; font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
 .voice-gateway-form input { height: 39px; }
 .voice-gateway-form input:focus, .voice-gateway-form textarea:focus { border-color: #91c16f; box-shadow: 0 0 0 2px rgba(181,242,141,.09); }
+.voice-gateway-form { grid-template-columns: 1fr; }
+.transcript-panel, .google-config-panel { margin-top: 16px; padding: 24px 29px; }
+.transcript-list { min-height: 120px; max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 10px; list-style: none; margin: 16px 0 0; padding: 0; }
+.transcript-item { max-width: 82%; padding: 11px 14px; border: 1px solid #343d38; border-radius: 8px; background: #111614; color: #e9eee8; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.transcript-item.caller { align-self: flex-start; border-color: #4d644b; }
+.transcript-item.kore { align-self: flex-end; border-color: #3d5261; background: #151b20; }
+.transcript-speaker { display: block; margin-bottom: 4px; color: #b5f28d; font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
+.transcript-time { display: block; margin-top: 5px; color: #7f8982; font-size: 9px; }
+.transcript-empty { color: #8a948c; font-size: 11px; }
+.google-config-panel summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; list-style: none; }
+.google-config-panel summary::-webkit-details-marker { display: none; }
+.google-config-panel summary strong { display: block; margin-top: 7px; color: #f0f4ef; font-size: 17px; font-weight: 500; }
+.google-config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 22px; }
+.google-config-grid label { display: flex; flex-direction: column; gap: 7px; color: #dfe6df; font-size: 10px; }
+.google-config-grid input, .google-config-grid select { width: 100%; min-width: 0; height: 39px; padding: 10px; border: 1px solid #343d38; border-radius: 4px; outline: none; color: #e9eee8; background: #111614; font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.google-config-grid input:focus, .google-config-grid select:focus { border-color: #91c16f; box-shadow: 0 0 0 2px rgba(181,242,141,.09); }
+.google-config-grid .check-setting { justify-content: center; }
+.google-config-grid .check-setting span { display: flex; align-items: center; gap: 9px; color: #dfe6df; font-size: 10px; }
+.google-config-grid .check-setting input { width: 16px; min-width: 16px; height: 16px; accent-color: #b5f28d; }
+.google-config-grid .check-setting small { color: #8a948c; font-size: 9px; }
 .media-copy { max-width: 740px; margin-top: 13px; color: #a3ada6; font-size: 11px; line-height: 1.7; }
 .media-form { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 13px; margin-top: 19px; }
 .media-form label { display: flex; flex-direction: column; gap: 7px; margin: 0; color: #dfe6df; font-size: 10px; }
@@ -190,6 +212,9 @@ input:focus { border-color: #91c16f; box-shadow: 0 0 0 2px rgba(181,242,141,.09)
   .media-panel { padding: 20px 17px; }
   .voice-call-panel { padding: 20px 17px; }
   .voice-gateway-form { grid-template-columns: 1fr; }
+  .google-config-grid { grid-template-columns: 1fr; }
+  .transcript-panel, .google-config-panel { padding: 20px 17px; }
+  .transcript-item { max-width: 96%; }
   .media-form { grid-template-columns: 1fr; }
   .media-form label:nth-child(2) { grid-column: auto; }
   .media-controls { align-items: stretch; flex-direction: column; }
