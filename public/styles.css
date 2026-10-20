@@ -105,7 +105,7 @@ h1 em { color: var(--accent); font-style: normal; }
 .panel-kicker { color: #7f8a83; font-size: 9px; letter-spacing: 1.4px; }
 h2 { margin-top: 8px; font-family: inherit; font-size: 22px; font-weight: 600; letter-spacing: -.6px; }
 .record-indicator { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid #483131; border-radius: 4px; color: #e19486; font-size: 9px; letter-spacing: .9px; }
-.record-indicator span { display: inline-block; width: 6px; height: 6px; background: #eb7969; border-radius: 50%; box-shadow: 0 0 8px rgba(235,121,105,.4); }
+.record-indicator > span:first-child { display: inline-block; width: 6px; height: 6px; background: #eb7969; border-radius: 50%; box-shadow: 0 0 8px rgba(235,121,105,.4); }
 .notice { display: flex; gap: 10px; margin: 22px 0 23px; padding: 12px 13px; border: 1px solid #333c37; border-radius: 5px; background: rgba(255,255,255,.025); }
 .notice-icon { flex: 0 0 15px; width: 15px; height: 15px; border: 1px solid #8cae78; color: #b4d69c; text-align: center; border-radius: 50%; font-family: inherit; font-size: 10px; font-weight: 500; line-height: 14px; }
 .notice p { color: #a6afa9; font-size: 11px; line-height: 1.6; }

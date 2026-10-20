@@ -5,7 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isIPv4 } from 'node:net';
+import net, { isIPv4 } from 'node:net';
 import { createSiprecSession } from './siprec-src.js';
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +31,7 @@ const koreConfig = appConfig.kore && typeof appConfig.kore === 'object' ? appCon
 const mediaConfig = appConfig.media && typeof appConfig.media === 'object' ? appConfig.media : {};
 const host = typeof appConfig.host === 'string' ? appConfig.host : '127.0.0.1';
 const port = Number(appConfig.port || 3000);
+const sipTransport = String(koreConfig.sipTransport || 'TLS').trim().toUpperCase();
 
 const gateways = [
   { id: 'primary', label: 'Kore SBC 1', uri: typeof koreConfig.siprecPrimaryUri === 'string' ? koreConfig.siprecPrimaryUri : '' },
@@ -102,25 +103,47 @@ function parseKoreSipUri(uri) {
   return target;
 }
 
-function probeTls(target) {
-  return new Promise((resolveProbe, rejectProbe) => {
-    const socket = tls.connect({
-      host: target.host,
-      port: target.port,
-      servername: target.host,
-      rejectUnauthorized: true,
-      minVersion: 'TLSv1.2',
-    });
+async function loadTlsOptions() {
+  const caFile = typeof koreConfig.tlsCaFile === 'string' ? koreConfig.tlsCaFile : '';
+  const certFile = typeof koreConfig.tlsCertFile === 'string' ? koreConfig.tlsCertFile : '';
+  const keyFile = typeof koreConfig.tlsKeyFile === 'string' ? koreConfig.tlsKeyFile : '';
+  if (Boolean(certFile) !== Boolean(keyFile)) {
+    throw new Error('Set both kore.tlsCertFile and kore.tlsKeyFile to use a TLS client certificate.');
+  }
+  const [ca, cert, key] = await Promise.all([
+    caFile ? readFile(caFile) : undefined,
+    certFile ? readFile(certFile) : undefined,
+    keyFile ? readFile(keyFile) : undefined,
+  ]);
+  return { ca, cert, key };
+}
 
-    const timer = setTimeout(() => socket.destroy(new Error('TLS connection timed out')), 7000);
-    socket.once('secureConnect', () => {
+function probeSipTransport(target, transport, tlsOptions = {}) {
+  if (!['TLS', 'TCP'].includes(transport)) {
+    return Promise.reject(new Error(`SIP transport ${transport} is not supported. Choose TCP or TLS.`));
+  }
+  return new Promise((resolveProbe, rejectProbe) => {
+    const socket = transport === 'TLS'
+      ? tls.connect({
+        host: target.host,
+        port: target.port,
+        servername: target.host,
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.2',
+        ...tlsOptions,
+      })
+      : net.connect({ host: target.host, port: target.port });
+    const connectedEvent = transport === 'TLS' ? 'secureConnect' : 'connect';
+    const timer = setTimeout(() => socket.destroy(new Error(`${transport} connection timed out`)), 7000);
+    socket.once(connectedEvent, () => {
       clearTimeout(timer);
-      const certificate = socket.getPeerCertificate();
-      resolveProbe({
-        reachable: true,
-        tlsVersion: socket.getProtocol(),
-        certificateSubject: certificate.subject?.CN || certificate.subject?.O || 'verified certificate',
-      });
+      const result = { reachable: true, transport };
+      if (transport === 'TLS') {
+        const certificate = socket.getPeerCertificate();
+        result.tlsVersion = socket.getProtocol();
+        result.certificateSubject = certificate.subject?.CN || certificate.subject?.O || 'verified certificate';
+      }
+      resolveProbe(result);
       socket.end();
     });
     socket.once('error', (error) => {
@@ -142,7 +165,7 @@ async function handle(req, res) {
       rtpPort,
       mediaProfile,
       mediaCodec: 'PCMU/8000',
-      sipTransport: typeof koreConfig.sipTransport === 'string' ? koreConfig.sipTransport : 'TLS',
+      sipTransport,
       siprecIdentifier: typeof koreConfig.siprecIdentifier === 'string' ? koreConfig.siprecIdentifier : '',
       dtmf: typeof koreConfig.dtmf === 'string' ? koreConfig.dtmf : 'RFC2833',
       sipCredentialsConfigured: Boolean(koreConfig.sipUsername && koreConfig.sipPassword),
@@ -160,6 +183,7 @@ async function handle(req, res) {
     const sipUri = String(body.sipUri || endpoint.uri || '').trim();
     if (!sipUri) return json(res, 400, { error: 'Paste a Kore SIPREC URI into the endpoint field.' });
     if (!parseKoreSipUri(sipUri)) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061.' });
+    if (!['TLS', 'TCP'].includes(sipTransport)) return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to TCP or TLS.` });
     if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCE VM static external IPv4 address.' });
     if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) return json(res, 400, { error: 'media.rtpPort in config.json must be an even UDP port from 1024 through 65534.' });
     if (mediaProfile !== 'RTP/AVP') {
@@ -174,6 +198,7 @@ async function handle(req, res) {
     try {
       const session = await createSiprecSession({
         uri: sipUri,
+        sipTransport,
         siprecIdentifier: typeof koreConfig.siprecIdentifier === 'string' ? koreConfig.siprecIdentifier : '',
         participantName,
         participantUri,
@@ -237,18 +262,26 @@ async function handle(req, res) {
     if (!target) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061' });
 
     try {
-      const result = await probeTls(target);
+      if (!['TLS', 'TCP'].includes(sipTransport)) {
+        return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to TCP or TLS.` });
+      }
+      const tlsOptions = sipTransport === 'TLS' ? await loadTlsOptions() : {};
+      const result = await probeSipTransport(target, sipTransport, tlsOptions);
       return json(res, 200, {
         endpoint: gateway.id,
         ...result,
-        message: 'TLS handshake succeeded. This does not send SIP signaling, SIPREC metadata, or audio.',
+        message: sipTransport === 'TLS'
+          ? 'TLS handshake succeeded. This does not send SIP signaling, SIPREC metadata, or audio.'
+          : 'TCP connection succeeded. This does not send SIP signaling, SIPREC metadata, or audio.',
       });
     } catch (error) {
       return json(res, 502, {
         endpoint: gateway.id,
         reachable: false,
-        error: error.code || error.message || 'TLS handshake failed',
-        message: 'Check DNS, outbound TCP/TLS, Kore IP allowlisting, certificate requirements, and the configured port.',
+        error: error.code || error.message || `${sipTransport} connection failed`,
+        message: sipTransport === 'TLS'
+          ? 'Check DNS, outbound TCP/TLS, Kore IP allowlisting, TLS requirements, and the configured port.'
+          : 'Check DNS, outbound TCP, Kore IP allowlisting, and the configured port.',
       });
     }
   }

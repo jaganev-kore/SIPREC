@@ -8,6 +8,10 @@ let activeMediaSession = null;
 let configuredEndpoints = [];
 let serverConfig = null;
 
+function currentSipTransport() {
+  return String(serverConfig?.sipTransport || 'TLS').trim().toUpperCase();
+}
+
 function setConnection(ready, message) {
   connectionStatus.classList.toggle('connected', ready);
   connectionStatus.classList.toggle('disconnected', !ready);
@@ -47,21 +51,22 @@ function buildEndpointCard(endpoint) {
   row.className = 'probe-row';
   const result = document.createElement('p');
   result.className = 'probe-result';
-  result.textContent = endpoint.uri ? 'No TLS check run yet.' : 'Paste the SIPREC URL to configure this endpoint.';
+  result.textContent = endpoint.uri ? `No ${currentSipTransport()} check run yet.` : 'Paste the SIPREC URL to configure this endpoint.';
   result.setAttribute('aria-live', 'polite');
 
   const button = document.createElement('button');
   button.className = 'probe-button';
   button.type = 'button';
   button.dataset.endpoint = endpoint.id;
-  button.textContent = 'Test TLS path';
+  button.textContent = `Test ${currentSipTransport()} path`;
   button.disabled = !endpoint.uri;
   button.addEventListener('click', async () => {
     if (!endpoint.uri.trim()) return;
     button.disabled = true;
     button.textContent = 'Checking…';
     result.classList.remove('success', 'failure');
-    result.textContent = 'Opening TLS connection from this Node server…';
+    const transport = currentSipTransport();
+    result.textContent = `Opening ${transport} connection from this Node server…`;
     try {
       const response = await fetch('/api/probe', {
         method: 'POST',
@@ -69,15 +74,17 @@ function buildEndpointCard(endpoint) {
         body: JSON.stringify({ endpoint: endpoint.id, sipUri: endpoint.uri.trim() }),
       });
       const data = await response.json();
-      if (!response.ok || !data.reachable) throw new Error(data.message || data.error || 'TLS check failed');
+      if (!response.ok || !data.reachable) throw new Error(data.message || data.error || `${transport} check failed`);
       result.classList.add('success');
-      result.textContent = `TLS ${data.tlsVersion} verified (${data.certificateSubject}). No SIP or media was sent.`;
+      result.textContent = data.transport === 'TLS'
+        ? `TLS ${data.tlsVersion} verified (${data.certificateSubject}). No SIP or media was sent.`
+        : 'TCP connection succeeded. No SIP or media was sent.';
     } catch (error) {
       result.classList.add('failure');
-      result.textContent = error.message || 'Unable to reach Kore over TLS.';
+      result.textContent = error.message || `Unable to reach Kore over ${transport}.`;
     } finally {
       button.disabled = !endpoint.uri.trim();
-      button.textContent = 'Test TLS path';
+      button.textContent = `Test ${currentSipTransport()} path`;
     }
   });
 
@@ -87,7 +94,7 @@ function buildEndpointCard(endpoint) {
     badge.textContent = endpoint.uri ? 'URL ADDED' : 'ADD SIPREC URL';
     button.disabled = !endpoint.uri;
     result.classList.remove('success', 'failure');
-    result.textContent = endpoint.uri ? 'No TLS check run yet.' : 'Paste the SIPREC URL to configure this endpoint.';
+    result.textContent = endpoint.uri ? `No ${currentSipTransport()} check run yet.` : 'Paste the SIPREC URL to configure this endpoint.';
     updateEndpointReadiness();
   });
 
@@ -183,7 +190,7 @@ async function startMediaSession() {
     if (pendingAudioContext.sampleRate !== 48000) throw new Error(`This browser created ${pendingAudioContext.sampleRate} Hz audio; the test source needs 48 kHz input.`);
     await pendingAudioContext.audioWorklet.addModule('/audio-worklet.js');
 
-    setMediaStatus('Opening a SIPREC session to Kore over TLS…');
+    setMediaStatus(`Opening a SIPREC session to Kore over ${currentSipTransport()}…`);
     const response = await fetch('/api/session/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -248,6 +255,10 @@ async function loadConfig() {
     if (!response.ok) throw new Error('Configuration endpoint is unavailable.');
     const config = await response.json();
     serverConfig = config;
+    document.querySelector('#transport-label').textContent = currentSipTransport();
+    document.querySelector('#media-warning').textContent = currentSipTransport() === 'TCP'
+      ? 'SIP signaling and SIPREC metadata use unencrypted TCP. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
+      : 'Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.';
     configuredEndpoints = config.endpoints.map((endpoint) => {
       let uri = endpoint.uri || '';
       try {

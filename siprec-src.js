@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import tls from 'node:tls';
 
 const CRLF = '\r\n';
@@ -120,9 +121,10 @@ function parseSipMessage(packet) {
   };
 }
 
-class SipTlsConnection {
-  constructor(socket) {
+class SipConnection {
+  constructor(socket, transport) {
     this.socket = socket;
+    this.transport = transport;
     this.buffer = '';
     this.messages = [];
     this.waiters = [];
@@ -130,7 +132,7 @@ class SipTlsConnection {
     socket.on('data', (chunk) => this.onData(chunk));
     socket.on('error', (error) => this.fail(error));
     socket.on('close', () => {
-      this.fail(new Error('Kore closed the SIP/TLS connection.'));
+      this.fail(new Error(`Kore closed the SIP/${this.transport} connection.`));
       this.onClose?.();
     });
   }
@@ -180,7 +182,7 @@ class SipTlsConnection {
   }
 
   write(message) {
-    if (this.closedError || this.socket.destroyed) throw this.closedError || new Error('SIP/TLS connection is closed.');
+    if (this.closedError || this.socket.destroyed) throw this.closedError || new Error(`SIP/${this.transport} connection is closed.`);
     this.socket.write(message);
   }
 
@@ -311,11 +313,11 @@ function makeRtcpSenderReport({ ssrc, rtpTimestamp, packetCount, octetCount, cna
   return Buffer.concat([senderReport, sdes]);
 }
 
-function makeSipRequest({ method, requestUri, viaHost, from, to, callId, cseq, routeHeaders = [], body = '', contentType = null, contact = null }) {
+function makeSipRequest({ transport, method, requestUri, viaHost, from, to, callId, cseq, routeHeaders = [], body = '', contentType = null, contact = null }) {
   const branch = `z9hG4bK${crypto.randomBytes(10).toString('hex')}`;
   const lines = [
     `${method} ${requestUri} SIP/2.0`,
-    `Via: SIP/2.0/TLS ${viaHost};branch=${branch};rport`,
+    `Via: SIP/2.0/${transport} ${viaHost};branch=${branch};rport`,
     'Max-Forwards: 70',
     `From: ${from}`,
     `To: ${to}`,
@@ -346,6 +348,7 @@ async function loadTlsFiles({ caFile, certFile, keyFile }) {
 
 export async function createSiprecSession({
   uri,
+  sipTransport = 'TLS',
   siprecIdentifier,
   participantName,
   participantUri,
@@ -356,44 +359,51 @@ export async function createSiprecSession({
   keyFile,
   logger = () => {},
 }) {
+  const transport = String(sipTransport).trim().toUpperCase();
+  if (!['TLS', 'TCP'].includes(transport)) throw new Error(`SIP transport ${transport} is not supported. Choose TCP or TLS.`);
   if (!publicIp) throw new Error('Set media.publicIp in config.json to the VM static external IPv4 address before starting a stream.');
   if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) {
     throw new Error('media.rtpPort in config.json must be an even UDP port from 1024 through 65534.');
   }
   const target = parseSipUri(uri);
-  const tlsFiles = await loadTlsFiles({ caFile, certFile, keyFile });
+  const tlsFiles = transport === 'TLS' ? await loadTlsFiles({ caFile, certFile, keyFile }) : {};
   const startedAt = new Date();
   const callId = `${crypto.randomUUID()}@${publicIp}`;
   const fromTag = randomTag();
-  const fromUri = `sip:${encodeURIComponent(siprecIdentifier || 'src')}@${publicIp};transport=tls`;
-  const contact = `<sip:${encodeURIComponent(siprecIdentifier || 'src')}@${publicIp};transport=tls>;+sip.src`;
+  const transportParam = transport.toLowerCase();
+  const fromUri = `sip:${encodeURIComponent(siprecIdentifier || 'src')}@${publicIp};transport=${transportParam}`;
+  const contact = `<sip:${encodeURIComponent(siprecIdentifier || 'src')}@${publicIp};transport=${transportParam}>;+sip.src`;
   const from = `<${fromUri}>;tag=${fromTag}`;
   const to = `<${uri}>`;
   const metadata = buildMetadata({ callId, participantName, participantUri, startedAt });
   const sdp = makeSdp(publicIp, rtpPort);
   const mime = makeInviteBody(sdp, metadata);
 
-  const socket = tls.connect({
-    host: target.host,
-    port: target.port,
-    servername: target.host,
-    minVersion: 'TLSv1.2',
-    rejectUnauthorized: true,
-    ...tlsFiles,
-  });
-  const tlsTimeout = setTimeout(() => socket.destroy(new Error('Timed out connecting to Kore over TLS.')), 10000);
+  const socket = transport === 'TLS'
+    ? tls.connect({
+      host: target.host,
+      port: target.port,
+      servername: target.host,
+      minVersion: 'TLSv1.2',
+      rejectUnauthorized: true,
+      ...tlsFiles,
+    })
+    : net.connect({ host: target.host, port: target.port });
+  const connectedEvent = transport === 'TLS' ? 'secureConnect' : 'connect';
+  const connectTimeout = setTimeout(() => socket.destroy(new Error(`Timed out connecting to Kore over ${transport}.`)), 10000);
   try {
     await new Promise((resolve, reject) => {
-      socket.once('secureConnect', resolve);
+      socket.once(connectedEvent, resolve);
       socket.once('error', reject);
     });
   } finally {
-    clearTimeout(tlsTimeout);
+    clearTimeout(connectTimeout);
   }
-  const sip = new SipTlsConnection(socket);
-  logger(`TLS connected to ${target.host}:${target.port}`);
+  const sip = new SipConnection(socket, transport);
+  logger(`SIP/${transport} connected to ${target.host}:${target.port}`);
 
   const invite = makeSipRequest({
+    transport,
     method: 'INVITE',
     requestUri: uri,
     viaHost: publicIp,
@@ -440,12 +450,14 @@ export async function createSiprecSession({
   const dialogRoutes = strictRoute ? [...routeSet.slice(1), `<${remoteTarget}>`] : routeSet;
   const sendBye = async () => {
     sip.write(makeSipRequest({
+      transport,
       method: 'BYE', requestUri: dialogTarget, viaHost: publicIp,
       from, to: responseTo, callId, cseq: 2, routeHeaders: dialogRoutes,
     }));
     await sip.nextResponse(3000).catch(() => null);
   };
   sip.write(makeSipRequest({
+    transport,
     method: 'ACK', requestUri: dialogTarget, viaHost: publicIp,
     from, to: responseTo, callId, cseq: 1, routeHeaders: dialogRoutes,
   }));
@@ -534,10 +546,10 @@ export async function createSiprecSession({
   };
   sip.onClose = () => {
     if (!ended) {
-      logger('SIP/TLS connection closed; stopping the media stream.');
+      logger(`SIP/${transport} connection closed; stopping the media stream.`);
       session.stop({ remote: true });
     }
   };
-  logger(`SIPREC session established; Kore media destination ${remoteMedia.address}:${remoteMedia.port}, PCMU/8000.`);
+  logger(`SIPREC session established over ${transport}; Kore media destination ${remoteMedia.address}:${remoteMedia.port}, PCMU/8000.`);
   return session;
 }

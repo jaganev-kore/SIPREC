@@ -1,13 +1,13 @@
 # Kore Agent Assist SIPREC microphone test source
 
-This Node.js prototype adds a **Start SIPREC & microphone** button. The browser captures one microphone channel, converts it to PCMU/8000, and sends 20 ms audio frames to the Node service over the page's WebSocket. The service initiates a SIPREC INVITE to the configured Kore SRS over TLS and sends the microphone audio as RTP. Stop sends SIP BYE.
+This Node.js prototype adds a **Start SIPREC & microphone** button. The browser captures one microphone channel, converts it to PCMU/8000, and sends 20 ms audio frames to the Node service over the page's WebSocket. The service initiates a SIPREC INVITE to the configured Kore SRS over the configured TCP or TLS signaling transport and sends the microphone audio as RTP. Stop sends SIP BYE.
 
 The SIPREC INVITE includes the standard `Require: siprec`, `;+sip.src` Contact feature, SDP label, and RFC 7865 recording metadata. The session describes one synthetic web participant and one audio stream. This is suitable only as an initial connectivity experiment, not a complete contact-center call path.
 
 ## Important limits
 
 - Kore is the SIPREC recording server (SRS); this Node service acts as the recording source (SRC) and initiates the SIPREC INVITE. This follows [RFC 7866](https://www.rfc-editor.org/rfc/rfc7866).
-- The prototype offers a single `RTP/AVP` PCMU/8000 audio stream. It does not implement SRTP, RTCP feedback processing, SIP digest authentication, or media transcoding. TLS protects SIP signaling and metadata; the prototype's RTP media is **not encrypted**. Use non-sensitive test speech only, and do not use real customer calls.
+- The prototype offers a single `RTP/AVP` PCMU/8000 audio stream. It does not implement SRTP, RTCP feedback processing, SIP digest authentication, or media transcoding. TLS encrypts SIP signaling and metadata; plain TCP does not. The prototype's RTP media is **not encrypted** in either mode. Use non-sensitive test speech only, and do not use real customer calls.
 - This client offers one send-only audio stream. Many Agent Assist deployments need both customer and agent audio legs, so Kore must confirm whether this single-stream test is accepted. Kore may accept the SIP session but not create the expected transcript without its required stream count or Kore-specific metadata.
 - The metadata contains the participant name and SIP/tel URI entered in the UI. It does not invent an agent ID, customer ID, or Kore-specific metadata fields.
 - SIPREC does not return Kore's spoken response. A two-way voice bot requires a separate Kore Voice AI SIP URI and a different call flow.
@@ -25,7 +25,9 @@ chmod 600 config.json
 npm start
 ```
 
-`media.profile` must remain `RTP/AVP` for this prototype. If Kore has Pad Crypto/SRTP enabled, do not start a test stream; this code does not implement SRTP. `kore.tlsCaFile`, `kore.tlsCertFile`, and `kore.tlsKeyFile` support optional CA/client-certificate files. Set certificate and key together, using absolute paths. The server already supports certificate-verified TLS 1.2+ to Kore.
+Set `kore.sipTransport` to the same transport selected for the Kore trunk: `TCP` or `TLS`. Restart Node after changing it. The endpoint connection test checks TCP reachability or completes a verified TLS handshake; it does not send SIP. `kore.tlsCaFile`, `kore.tlsCertFile`, and `kore.tlsKeyFile` apply only to TLS. Set certificate and key together, using absolute paths. TLS uses certificate verification and TLS 1.2 or newer.
+
+`media.profile` must remain `RTP/AVP` for this prototype. If Kore has Pad Crypto/SRTP enabled, do not start a test stream; this code does not implement SRTP.
 
 Open the UI over HTTPS on the GCE VM. Browsers require a secure context to grant microphone access (localhost is allowed for local development). For Nginx, proxy WebSocket upgrades as well as regular HTTP requests:
 
@@ -45,7 +47,7 @@ Restart Node after changing `config.json`.
 
 Use a Compute Engine VM and reserve a static external IPv4 address. Provide that actual egress/source address to Kore for allowlisting. Configure:
 
-- Outbound TCP/TLS from the VM to the Kore SIP SBC on port 5060.
+- Outbound TCP from the VM to the Kore SIP SBC on port 5060 (plain SIP/TCP or TLS over TCP, according to the trunk configuration).
 - Outbound UDP from the VM to the RTP destination port returned in Kore's SDP answer.
 - Inbound UDP for RTCP on `media.rtpPort + 1` from Kore's media IP ranges; the default local ports are 40000/40001. Confirm exact IP ranges and firewall direction with Kore.
 - Inbound HTTPS to the UI only from trusted users. Keep Node bound to `127.0.0.1` behind Nginx or another HTTPS proxy, and restrict the GCP firewall. This prototype has no user login.
@@ -59,7 +61,7 @@ The Voice Gateway form details alone do not confirm media interoperability. Ask 
 1. Whether this Agent AI SIPREC trunk accepts an SRC-initiated SIPREC INVITE from this test client.
 2. Whether a single audio m-line is supported, or both customer and agent directions are required.
 3. The accepted codecs, RTP versus SRTP/Pad Crypto profile, RTP/RTCP port ranges, and source/destination IP ranges.
-4. Whether a TLS client certificate or SIP credentials are required. The client certificate files can be configured above; digest authentication is not implemented.
+4. Which SIP transport and port the trunk accepts, and whether a TLS client certificate or SIP credentials are required. Client certificate files can be configured above for TLS; digest authentication is not implemented.
 5. The metadata fields required to associate the stream with an Agent AI session, agent, and customer. The prototype currently sends RFC 7865 metadata with one synthetic participant.
 6. Whether disabling “AgentAI Initiated transcription” causes transcription to begin automatically on the RTP stream sent by this source.
 

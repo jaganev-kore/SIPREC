@@ -33,7 +33,7 @@
             <div class="panel-kicker">SIPREC DESTINATIONS</div>
             <h2 id="gateway-title">Kore.ai SBC endpoints</h2>
           </div>
-          <div class="record-indicator"><span></span> TLS</div>
+          <div class="record-indicator"><span></span><span id="transport-label">TLS</span></div>
         </div>
         <p class="endpoint-help">Paste the SIPREC URLs from Kore here. They are saved in this browser and take effect immediately; no server restart is needed.</p>
         <div id="endpoints" class="endpoint-grid" aria-live="polite">
@@ -61,7 +61,7 @@
           <button class="stop-button" id="stop-session" type="button" disabled>Stop session</button>
           <span class="media-status" id="media-session-status" aria-live="polite">Checking media server configuration…</span>
         </div>
-        <div class="callout media-callout"><span class="callout-mark">!</span><span>Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.</span></div>
+        <div class="callout media-callout"><span class="callout-mark">!</span><span id="media-warning">Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.</span></div>
       </section>
 
       <section class="workspace explanation-grid">
