@@ -4,7 +4,12 @@ const connectionStatus = document.querySelector('#connection-status');
 const startSessionButton = document.querySelector('#start-session');
 const stopSessionButton = document.querySelector('#stop-session');
 const mediaSessionStatus = document.querySelector('#media-session-status');
+const voiceCallStatus = document.querySelector('#voice-call-status');
+const voiceCallStartButton = document.querySelector('#voice-call-start');
+const voiceCallStopButton = document.querySelector('#voice-call-stop');
+const voiceSpeakButton = document.querySelector('#voice-speak');
 let activeMediaSession = null;
+let activeVoiceCall = null;
 let configuredEndpoints = [];
 let serverConfig = null;
 
@@ -143,6 +148,152 @@ function setMediaStatus(message, state = '') {
   mediaSessionStatus.classList.toggle('failure', state === 'failure');
 }
 
+function setVoiceCallStatus(message, state = '') {
+  voiceCallStatus.textContent = message;
+  voiceCallStatus.classList.toggle('success', state === 'success');
+  voiceCallStatus.classList.toggle('failure', state === 'failure');
+}
+
+async function stopVoiceCall() {
+  const current = activeVoiceCall;
+  if (!current) return;
+  activeVoiceCall = null;
+  voiceCallStopButton.disabled = true;
+  voiceSpeakButton.disabled = true;
+  current.ttsSource?.stop();
+  current.ttsSource?.disconnect();
+  current.processor?.disconnect();
+  current.downlink?.disconnect();
+  current.source?.disconnect();
+  current.stream?.getTracks().forEach((track) => track.stop());
+  if (current.ws && current.ws.readyState < WebSocket.CLOSING) current.ws.close();
+  if (current.audioContext && current.audioContext.state !== 'closed') await current.audioContext.close();
+  try {
+    await fetch('/api/voice/session/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ streamToken: current.streamToken }),
+    });
+  } catch {}
+  voiceCallStartButton.disabled = false;
+  setVoiceCallStatus('Voice Gateway call ended.');
+}
+
+async function startVoiceCall() {
+  voiceCallStartButton.disabled = true;
+  setVoiceCallStatus('Requesting microphone access…');
+  let pendingStream;
+  let pendingAudioContext;
+  let current;
+  try {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access requires HTTPS (or localhost).');
+    pendingStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    pendingAudioContext = new AudioContext({ sampleRate: 48000 });
+    await pendingAudioContext.resume();
+    if (pendingAudioContext.sampleRate !== 48000) throw new Error('The browser did not provide a 48 kHz audio context.');
+    await pendingAudioContext.audioWorklet.addModule('/audio-worklet.js');
+    setVoiceCallStatus('Calling the Kore Voice Gateway…');
+    const uri = document.querySelector('#voice-gateway-uri').value.trim();
+    const response = await fetch('/api/voice/session/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sipUri: uri }),
+    });
+    const session = await response.json();
+    if (!response.ok) throw new Error(session.error || 'The Voice Gateway call could not be started.');
+    current = { ...session, stream: pendingStream, audioContext: pendingAudioContext, source: null, processor: null, downlink: null, ws: null, ttsSource: null };
+    pendingStream = null;
+    pendingAudioContext = null;
+    activeVoiceCall = current;
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    current.ws = await connectMediaSocket(`${wsProtocol}//${location.host}/api/voice/media?token=${encodeURIComponent(session.streamToken)}`);
+    current.ws.binaryType = 'arraybuffer';
+    current.source = current.audioContext.createMediaStreamSource(current.stream);
+    current.processor = new AudioWorkletNode(current.audioContext, 'pcmu-uplink', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+    current.downlink = new AudioWorkletNode(current.audioContext, 'pcmu-downlink', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+    current.processor.port.onmessage = (event) => {
+      if (activeVoiceCall === current && current.ws.readyState === WebSocket.OPEN) current.ws.send(event.data);
+    };
+    current.ws.addEventListener('message', (event) => {
+      if (activeVoiceCall === current && event.data instanceof ArrayBuffer) current.downlink.port.postMessage(event.data, [event.data]);
+    });
+    current.source.connect(current.processor, 0, 0);
+    current.processor.connect(current.audioContext.destination);
+    current.downlink.connect(current.audioContext.destination);
+    current.ws.addEventListener('close', () => {
+      if (activeVoiceCall !== current) return;
+      activeVoiceCall = null;
+      current.ttsSource?.stop();
+      current.processor?.disconnect();
+      current.downlink?.disconnect();
+      current.source?.disconnect();
+      current.stream?.getTracks().forEach((track) => track.stop());
+      if (current.audioContext.state !== 'closed') current.audioContext.close();
+      voiceCallStartButton.disabled = false;
+      voiceCallStopButton.disabled = true;
+      voiceSpeakButton.disabled = true;
+      setVoiceCallStatus('Voice Gateway call closed.');
+    });
+    voiceCallStopButton.disabled = false;
+    voiceSpeakButton.disabled = false;
+    setVoiceCallStatus(`Connected to Kore Voice Gateway (${session.remoteMedia.address}:${session.remoteMedia.port}). Speak into the microphone or send text.`, 'success');
+  } catch (error) {
+    if (current) {
+      activeVoiceCall = current;
+      await stopVoiceCall();
+    } else {
+      pendingStream?.getTracks().forEach((track) => track.stop());
+      if (pendingAudioContext && pendingAudioContext.state !== 'closed') await pendingAudioContext.close();
+      voiceCallStartButton.disabled = false;
+    }
+    setVoiceCallStatus(error.message || 'Unable to call the Voice Gateway.', 'failure');
+  }
+}
+
+async function speakVoiceText() {
+  const current = activeVoiceCall;
+  const text = document.querySelector('#voice-text').value.trim();
+  if (!current || !text) return;
+  voiceSpeakButton.disabled = true;
+  setVoiceCallStatus('Synthesizing speech with Google Cloud TTS…');
+  try {
+    const response = await fetch('/api/voice/session/tts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ streamToken: current.streamToken, text }),
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.error || 'Google Cloud TTS failed.');
+    }
+    const bytes = await response.arrayBuffer();
+    if (activeVoiceCall !== current) return;
+    if (bytes.byteLength % 2) throw new Error('Google Cloud TTS returned an incomplete PCM audio sample.');
+    const view = new DataView(bytes);
+    const sampleCount = bytes.byteLength / 2;
+    const audio = current.audioContext.createBuffer(1, sampleCount, 8000);
+    const channel = audio.getChannelData(0);
+    for (let i = 0; i < sampleCount; i++) channel[i] = view.getInt16(i * 2, true) / 32768;
+    const source = current.audioContext.createBufferSource();
+    source.buffer = audio;
+    source.connect(current.processor, 0, 1);
+    current.ttsSource = source;
+    source.addEventListener('ended', () => {
+      source.disconnect();
+      if (current.ttsSource === source) current.ttsSource = null;
+      if (activeVoiceCall === current) {
+        voiceSpeakButton.disabled = false;
+        setVoiceCallStatus('Speech sent to Kore. You can continue speaking.', 'success');
+      }
+    }, { once: true });
+    source.start();
+    setVoiceCallStatus('Sending synthesized speech to Kore…');
+  } catch (error) {
+    voiceSpeakButton.disabled = false;
+    setVoiceCallStatus(error.message || 'Could not synthesize speech.', 'failure');
+  }
+}
+
 async function stopMediaSession() {
   const current = activeMediaSession;
   if (!current) return;
@@ -189,6 +340,7 @@ async function startMediaSession() {
     }
     pendingStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
     pendingAudioContext = new AudioContext({ sampleRate: 48000 });
+    await pendingAudioContext.resume();
     if (pendingAudioContext.sampleRate !== 48000) throw new Error(`This browser created ${pendingAudioContext.sampleRate} Hz audio; the test source needs 48 kHz input.`);
     await pendingAudioContext.audioWorklet.addModule('/audio-worklet.js');
 
@@ -249,6 +401,13 @@ async function startMediaSession() {
 
 startSessionButton.addEventListener('click', startMediaSession);
 stopSessionButton.addEventListener('click', stopMediaSession);
+voiceCallStartButton.addEventListener('click', startVoiceCall);
+voiceCallStopButton.addEventListener('click', stopVoiceCall);
+voiceSpeakButton.addEventListener('click', speakVoiceText);
+document.querySelector('#voice-gateway-uri').addEventListener('input', (event) => {
+  try { localStorage.setItem('kore-voice-gateway-uri', event.currentTarget.value.trim()); } catch {}
+  if (!activeVoiceCall) setVoiceCallStatus(event.currentTarget.value.trim() ? 'Ready to call the Kore Voice Gateway.' : 'Configure a Voice Gateway SIP URL to start.');
+});
 document.querySelector('#session-endpoint').addEventListener('change', updateEndpointReadiness);
 
 async function loadConfig() {
@@ -257,6 +416,13 @@ async function loadConfig() {
     if (!response.ok) throw new Error('Configuration endpoint is unavailable.');
     const config = await response.json();
     serverConfig = config;
+    let voiceUri = config.voiceGatewayUri || '';
+    try {
+      const savedVoiceUri = localStorage.getItem('kore-voice-gateway-uri');
+      if (savedVoiceUri !== null) voiceUri = savedVoiceUri;
+    } catch {}
+    document.querySelector('#voice-gateway-uri').value = voiceUri;
+    setVoiceCallStatus(voiceUri ? `Ready for a ${config.voiceGatewayTransport} Voice Gateway call. Agent transfer follows the Kore automation.` : 'Paste the Kore Voice Gateway SIP URI to configure this call path.');
     document.querySelector('#transport-label').textContent = currentSipTransport();
     document.querySelector('#media-warning').textContent = currentSipTransport() === 'TCP'
       ? 'SIP signaling and SIPREC metadata use unencrypted TCP. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
@@ -302,8 +468,8 @@ async function loadConfig() {
     }));
 
     document.querySelector('#voice-bot-status').textContent = config.voiceBotConfigured
-      ? 'A separate voice-bot URI is configured, but this test source still sends one-way SIPREC audio only.'
-      : 'No separate Kore voice-bot SIP URI is configured. This SIPREC test source does not return spoken AI audio.';
+      ? 'Voice Gateway URI is configured. Use the separate call panel above for two-way voice and Kore automation.'
+      : 'No Voice Gateway URI is configured. Paste the URI in the Voice Gateway call panel above.';
 
   } catch (error) {
     endpointsContainer.textContent = error.message || 'Unable to load Kore endpoint configuration.';

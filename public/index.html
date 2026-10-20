@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>Kore.ai Agent Assist • SIPREC Test</title>
+    <title>SignalDesk • Kore Voice Gateway and SIPREC</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
   </head>
@@ -16,15 +16,15 @@
           <span>Signal<span class="brand-light">Desk</span></span>
         </a>
         <div class="topbar-meta">
-          <span class="environment"><span class="environment-dot"></span> AGENT ASSIST / SIPREC</span>
+          <span class="environment"><span class="environment-dot"></span> KORE VOICE / SIPREC</span>
           <span class="connection" id="connection-status"><span class="status-dot"></span> Loading endpoints</span>
         </div>
       </header>
 
       <section class="hero">
         <div class="eyebrow"><span class="eyebrow-line"></span> KORE.AI VOICE GATEWAY</div>
-        <h1>Check the path<br /><em>to Agent Assist.</em></h1>
-        <p class="hero-copy">Start a one-way microphone test to the Kore Agent Assist SIPREC endpoint. The Node service opens the SIPREC session and streams PCMU audio from this page.</p>
+        <h1>Connect to<br /><em>Kore voice.</em></h1>
+        <p class="hero-copy">Use the separate SIPREC path for Agent Assist recording, or call the Kore Voice Gateway for a two-way automated conversation with microphone and synthesized speech.</p>
       </section>
 
       <section class="panel gateway-panel" aria-labelledby="gateway-title">
@@ -64,6 +64,28 @@
         <div class="callout media-callout"><span class="callout-mark">!</span><span id="media-warning">Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.</span></div>
       </section>
 
+      <section class="panel voice-call-panel" aria-labelledby="voice-call-title">
+        <div class="panel-heading">
+          <div>
+            <div class="panel-kicker">TWO-WAY VOICE AI</div>
+            <h2 id="voice-call-title">Call the Kore Voice Gateway</h2>
+          </div>
+          <div class="record-indicator"><span></span> SIP CALL</div>
+        </div>
+        <p class="media-copy">Start a SIP call to the Voice Gateway. Speak through your microphone, or send text to Google Cloud Text-to-Speech and play it into the call. Kore automation controls the conversation and any agent transfer.</p>
+        <div class="voice-gateway-form">
+          <label>Kore Voice Gateway SIP URL<input id="voice-gateway-uri" type="text" autocomplete="off" spellcheck="false" placeholder="sip:your-bot@voice-gateway.kore.ai:5060" /></label>
+          <label>Text to speak<textarea id="voice-text" rows="3" maxlength="2000" placeholder="Type text for the Kore bot to hear"></textarea></label>
+        </div>
+        <div class="media-controls">
+          <button class="start-button" id="voice-call-start" type="button">Call Voice Gateway</button>
+          <button class="stop-button" id="voice-call-stop" type="button" disabled>End call</button>
+          <button class="probe-button" id="voice-speak" type="button" disabled>Speak text</button>
+          <span class="media-status" id="voice-call-status" aria-live="polite">Configure a Voice Gateway SIP URL to start.</span>
+        </div>
+        <div class="callout media-callout"><span class="callout-mark">i</span><span>Microphone audio and synthesized speech are sent as PCMU/8000 RTP. The UI does not select agent targets; agent transfer must be configured in the Kore automation.</span></div>
+      </section>
+
       <section class="workspace explanation-grid">
         <article class="panel explanation-panel">
           <div class="panel-kicker">WHAT SIPREC DOES</div>
@@ -76,7 +98,7 @@
           <div class="panel-kicker">TWO-WAY CUSTOMER CONVERSATION</div>
           <h2>For a spoken answer, use Kore Voice AI.</h2>
           <p>The SIPREC standard is for recording/replicating media to a recording server; the SRC normally sends audio and the SRS receives it. It does not define a spoken AI response back to the customer.</p>
-          <div class="voice-requirement"><span class="requirement-dot"></span><div><strong>Voice-bot call path</strong><small id="voice-bot-status">No separate Kore voice-bot SIP URI is configured. A SIP/WebRTC media gateway is also required.</small></div></div>
+          <div class="voice-requirement"><span class="requirement-dot"></span><div><strong>Voice Gateway call path</strong><small id="voice-bot-status">Configure the Kore Voice Gateway SIP URI above.</small></div></div>
         </article>
       </section>
 
@@ -93,8 +115,8 @@
       </section>
 
       <footer class="footer">
-        <span>NODE.JS SIPREC TEST SRC <span class="footer-divider">/</span> PCMU AUDIO</span>
-        <span>TEST ONLY <span class="footer-divider">/</span> NO VOICE RETURN PATH</span>
+        <span>NODE.JS SIPREC SRC + VOICE GATEWAY CALLER <span class="footer-divider">/</span> PCMU AUDIO</span>
+        <span>TEST CALLER <span class="footer-divider">/</span> KORE AUTOMATION CONTROLS TRANSFER</span>
       </footer>
     </main>
   </body>

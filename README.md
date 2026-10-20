@@ -10,7 +10,7 @@ The SIPREC INVITE includes the standard `Require: siprec`, `;+sip.src` Contact f
 - The prototype offers a single `RTP/AVP` PCMU/8000 audio stream. It does not implement SRTP, RTCP feedback processing, SIP digest authentication, or media transcoding. TLS encrypts SIP signaling and metadata; UDP and plain TCP do not. The prototype's RTP media is **not encrypted** in any mode. Use non-sensitive test speech only, and do not use real customer calls.
 - This client offers one send-only audio stream. Many Agent Assist deployments need both customer and agent audio legs, so Kore must confirm whether this single-stream test is accepted. Kore may accept the SIP session but not create the expected transcript without its required stream count or Kore-specific metadata.
 - The metadata contains the participant name and SIP/tel URI entered in the UI. It does not invent an agent ID, customer ID, or Kore-specific metadata fields.
-- SIPREC does not return Kore's spoken response. A two-way voice bot requires a separate Kore Voice AI SIP URI and a different call flow.
+- The SIPREC test remains one-way. A separate Voice Gateway caller below supports a two-way voice call.
 - The page does not display transcripts. Check the session in Kore.ai.
 
 ## Configure
@@ -28,6 +28,14 @@ npm start
 Set `kore.sipTransport` to the same transport selected for the Kore trunk: `UDP`, `TCP`, or `TLS`. Restart Node after changing it. The TCP check tests connection reachability and the TLS check completes a verified handshake; neither sends SIP. UDP has no connection handshake, so its check only confirms DNS resolution and local UDP socket setup; it does not verify remote reachability. `kore.tlsCaFile`, `kore.tlsCertFile`, and `kore.tlsKeyFile` apply only to TLS. Set certificate and key together, using absolute paths. TLS uses certificate verification and TLS 1.2 or newer.
 
 `media.profile` must remain `RTP/AVP` for this prototype. If Kore has Pad Crypto/SRTP enabled, do not start a test stream; this code does not implement SRTP.
+
+## Kore Voice Gateway call
+
+The **Call the Kore Voice Gateway** panel starts a separate SIP call using `kore.voiceBotSipUri` (or the SIP URI entered in the UI). It offers send/receive PCMU/8000 RTP, forwards microphone audio to Kore, and plays Kore audio in the browser. The text box uses Google Cloud Text-to-Speech to synthesize 8 kHz call audio. SIPREC remains a separate mode and keeps its existing configuration and behavior.
+
+Set `kore.voiceGatewayTransport` to the transport Kore assigned (`UDP`, `TCP`, or `TLS`) and set `media.voiceGatewayRtpPort` to an even local UDP port. The Voice Gateway SIP URI must be a `sip:` or `sips:` URI on a Kore host and port 5060/5061. Agent automation and transfer destinations must be configured in Kore; this UI does not choose or dial an agent target. The Voice Gateway caller currently offers PCMU/8000 RTP and does not support SRTP or SIP digest authentication.
+
+Text-to-speech runs through the Google Cloud Text-to-Speech API using the GCP VM's attached service account. Enable the API and grant that service account permission to synthesize speech. Optional `kore.voiceTtsLanguageCode` and `kore.voiceTtsName` select a language and voice. The VM needs HTTPS egress to Google's API. Local development without a GCP metadata service account cannot use this TTS path.
 
 Open the UI over HTTPS on the GCE VM. Browsers require a secure context to grant microphone access (localhost is allowed for local development). For Nginx, proxy WebSocket upgrades as well as regular HTTP requests:
 
@@ -49,6 +57,9 @@ Use a Compute Engine VM and reserve a static external IPv4 address. Provide that
 
 - Outbound UDP from the VM to the Kore SIP SBC on the configured SIP port (usually 5060) when using UDP signaling; allow return SIP responses through the stateful firewall.
 - Outbound TCP from the VM to the Kore SIP SBC on port 5060 (plain SIP/TCP or TLS over TCP, according to the trunk configuration).
+- Outbound SIP signaling to the Voice Gateway using `kore.voiceGatewayTransport` and the configured gateway port.
+- Inbound UDP media on `media.voiceGatewayRtpPort` from Kore's media IP ranges, and outbound UDP to the RTP destination from the Voice Gateway's SDP answer.
+- Outbound HTTPS to Google Cloud Text-to-Speech when using the text-to-speech control.
 - Outbound UDP from the VM to the RTP destination port returned in Kore's SDP answer.
 - Inbound UDP for RTCP on `media.rtpPort + 1` from Kore's media IP ranges; the default local ports are 40000/40001. Confirm exact IP ranges and firewall direction with Kore.
 - Inbound HTTPS to the UI only from trusted users. Keep Node bound to `127.0.0.1` behind Nginx or another HTTPS proxy, and restrict the GCP firewall. This prototype has no user login.

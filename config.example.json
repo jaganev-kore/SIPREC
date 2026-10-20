@@ -10,6 +10,10 @@
     "sipUsername": "",
     "sipPassword": "",
     "voiceBotSipUri": "",
+    "voiceGatewayTransport": "UDP",
+    "voiceCallerId": "web-caller",
+    "voiceTtsLanguageCode": "en-US",
+    "voiceTtsName": "",
     "tlsCaFile": "",
     "tlsCertFile": "",
     "tlsKeyFile": ""
@@ -17,6 +21,7 @@
   "media": {
     "publicIp": "YOUR_GCE_STATIC_EXTERNAL_IPV4",
     "rtpPort": 40000,
+    "voiceGatewayRtpPort": 42000,
     "profile": "RTP/AVP"
   }
 }

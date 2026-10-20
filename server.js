@@ -9,6 +9,7 @@ import net, { isIPv4 } from 'node:net';
 import dgram from 'node:dgram';
 import { lookup } from 'node:dns/promises';
 import { createSiprecSession } from './siprec-src.js';
+import { createVoiceGatewaySession, synthesizeGoogleTts } from './voice-gateway.js';
 
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(appDirectory, 'public');
@@ -42,8 +43,15 @@ const gateways = [
 const mediaPublicIp = typeof mediaConfig.publicIp === 'string' ? mediaConfig.publicIp : '';
 const rtpPort = Number(mediaConfig.rtpPort || 40000);
 const mediaProfile = typeof mediaConfig.profile === 'string' ? mediaConfig.profile : 'RTP/AVP';
+const voiceGatewayUri = typeof koreConfig.voiceBotSipUri === 'string' ? koreConfig.voiceBotSipUri : '';
+const voiceGatewayTransport = String(koreConfig.voiceGatewayTransport || 'UDP').trim().toUpperCase();
+const voiceGatewayRtpPort = Number(mediaConfig.voiceGatewayRtpPort || 42000);
+const voiceTtsLanguageCode = typeof koreConfig.voiceTtsLanguageCode === 'string' ? koreConfig.voiceTtsLanguageCode : 'en-US';
+const voiceTtsName = typeof koreConfig.voiceTtsName === 'string' ? koreConfig.voiceTtsName : '';
 let activeSession = null;
 let sessionStarting = false;
+let activeVoiceSession = null;
+let voiceSessionStarting = false;
 
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -62,12 +70,12 @@ function json(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function readJson(req) {
+function readJson(req, maxBytes = 4096) {
   return new Promise((resolveBody, reject) => {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      if (Buffer.byteLength(body) > 4096) {
+      if (Buffer.byteLength(body) > maxBytes) {
         reject(Object.assign(new Error('Request body is too large'), { status: 413 }));
         req.destroy();
       }
@@ -184,8 +192,87 @@ async function handle(req, res) {
       dtmf: typeof koreConfig.dtmf === 'string' ? koreConfig.dtmf : 'RFC2833',
       sipCredentialsConfigured: Boolean(koreConfig.sipUsername && koreConfig.sipPassword),
       endpoints: gateways.map((gateway) => ({ ...gateway, configured: Boolean(gateway.uri) })),
-      voiceBotConfigured: Boolean(koreConfig.voiceBotSipUri),
+      voiceBotConfigured: Boolean(voiceGatewayUri),
+      voiceGatewayUri,
+      voiceGatewayTransport,
+      voiceGatewayRtpPort,
+      voiceTtsLanguageCode,
+      voiceTtsName,
     });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/voice/session/start') {
+    if (activeVoiceSession || voiceSessionStarting) return json(res, 409, { error: 'A Voice Gateway call is already active or starting.' });
+    const body = await readJson(req);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Request body must be a JSON object.' });
+    const uri = String(body.sipUri || voiceGatewayUri).trim();
+    const target = parseKoreSipUri(uri);
+    if (!target) return json(res, 400, { error: 'Enter the Kore Voice Gateway SIP URI (a kore.ai SIP/SIPS URI on port 5060 or 5061).' });
+    if (!['UDP', 'TCP', 'TLS'].includes(voiceGatewayTransport)) return json(res, 400, { error: 'kore.voiceGatewayTransport must be UDP, TCP, or TLS.' });
+    if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCP VM static external IPv4 address.' });
+    if (!Number.isInteger(voiceGatewayRtpPort) || voiceGatewayRtpPort < 1024 || voiceGatewayRtpPort > 65534 || voiceGatewayRtpPort % 2) return json(res, 400, { error: 'media.voiceGatewayRtpPort must be an even UDP port from 1024 through 65534.' });
+    voiceSessionStarting = true;
+    try {
+      const session = await createVoiceGatewaySession({
+        uri,
+        transport: voiceGatewayTransport,
+        publicIp: mediaPublicIp,
+        rtpPort: voiceGatewayRtpPort,
+        callerId: typeof koreConfig.voiceCallerId === 'string' ? koreConfig.voiceCallerId : (koreConfig.siprecIdentifier || 'web-caller'),
+        logger: (message) => console.log(`[voice] ${message}`),
+      });
+      const record = { session, token: crypto.randomBytes(32).toString('hex'), ws: null };
+      activeVoiceSession = record;
+      record.pendingAudio = [];
+      session.onAudio = (frame) => {
+        if (record.ws && !record.ws.destroyed && !record.ws.writableEnded) record.ws.write(websocketBinaryFrame(frame));
+        else {
+          record.pendingAudio.push(Buffer.from(frame));
+          if (record.pendingAudio.length > 100) record.pendingAudio.shift();
+        }
+      };
+      record.connectTimer = setTimeout(() => {
+        if (activeVoiceSession === record && !record.ws) {
+          activeVoiceSession = null;
+          record.session.stop().catch((error) => console.error(`[voice] cleanup after media connection timeout failed: ${error.message}`));
+        }
+      }, 20000);
+      session.onEnded = () => {
+        clearTimeout(record.connectTimer);
+        if (activeVoiceSession === record) activeVoiceSession = null;
+        if (record.ws && !record.ws.destroyed && !record.ws.writableEnded) record.ws.end(Buffer.from([0x88, 0x00]));
+      };
+      return json(res, 201, { sessionId: session.id, streamToken: record.token, callId: session.callId, remoteMedia: session.remoteMedia });
+    } catch (error) {
+      return json(res, 502, { error: error.message || 'Could not call the Kore Voice Gateway.' });
+    } finally {
+      voiceSessionStarting = false;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/voice/session/stop') {
+    const body = await readJson(req);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Request body must be a JSON object.' });
+    if (!activeVoiceSession) return json(res, 200, { stopped: true });
+    if (!safeTokenEqual(body.streamToken, activeVoiceSession.token)) return json(res, 403, { error: 'Invalid Voice Gateway session token.' });
+    const record = activeVoiceSession;
+    activeVoiceSession = null;
+    if (record.ws && !record.ws.destroyed) record.ws.end(Buffer.from([0x88, 0x00]));
+    await record.session.stop();
+    return json(res, 200, { stopped: true });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/voice/session/tts') {
+    const body = await readJson(req, 10000);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Request body must be a JSON object.' });
+    if (!activeVoiceSession || !safeTokenEqual(body.streamToken, activeVoiceSession.token)) return json(res, 403, { error: 'Start a Voice Gateway call before sending speech.' });
+    try {
+      const audio = await synthesizeGoogleTts(body.text, { languageCode: voiceTtsLanguageCode, voiceName: voiceTtsName });
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': audio.length, 'cache-control': 'no-store', 'x-audio-sample-rate': '8000', 'x-audio-format': 's16le-mono' });
+      return res.end(audio);
+    } catch (error) {
+      return json(res, 502, { error: error.message || 'Google Cloud TTS failed.' });
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/session/start') {
@@ -333,11 +420,99 @@ async function handle(req, res) {
   }
 }
 
+function websocketBinaryFrame(payload) {
+  if (payload.length < 126) return Buffer.concat([Buffer.from([0x82, payload.length]), payload]);
+  if (payload.length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x82;
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x82;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(payload.length), 2);
+  return Buffer.concat([header, payload]);
+}
+
+function acceptVoiceWebSocket(req, socket, head, requestUrl) {
+  const origin = req.headers.origin;
+  let originMatchesHost = false;
+  try { originMatchesHost = new URL(origin).host === req.headers.host; } catch {}
+  const record = activeVoiceSession;
+  const token = requestUrl.searchParams.get('token');
+  const key = req.headers['sec-websocket-key'];
+  if (!record || !safeTokenEqual(token, record.token) || !key || !originMatchesHost) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  const accept = crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+  socket.write(['HTTP/1.1 101 Switching Protocols', 'Upgrade: websocket', 'Connection: Upgrade', `Sec-WebSocket-Accept: ${accept}`, '', ''].join('\r\n'));
+  socket.setNoDelay(true);
+  clearTimeout(record.connectTimer);
+  record.ws = socket;
+  for (const frame of record.pendingAudio.splice(0)) socket.write(websocketBinaryFrame(frame));
+  let pending = head || Buffer.alloc(0);
+  const closeWithCode = (code) => {
+    const frame = Buffer.alloc(4);
+    frame[0] = 0x88;
+    frame[1] = 2;
+    frame.writeUInt16BE(code, 2);
+    if (!socket.destroyed) socket.end(frame);
+  };
+  const processFrames = () => {
+    while (pending.length >= 2) {
+      const first = pending[0];
+      const second = pending[1];
+      if (!(first & 0x80) || !(second & 0x80)) return closeWithCode(1002);
+      const opcode = first & 0x0f;
+      let length = second & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (pending.length < 4) return;
+        length = pending.readUInt16BE(2);
+        offset = 4;
+      } else if (length === 127) {
+        if (pending.length < 10) return;
+        const longLength = pending.readBigUInt64BE(2);
+        if (longLength > 2048n) return closeWithCode(1009);
+        length = Number(longLength);
+        offset = 10;
+      }
+      if (length > 2048) return closeWithCode(1009);
+      const frameLength = offset + 4 + length;
+      if (pending.length < frameLength) return;
+      const mask = pending.subarray(offset, offset + 4);
+      const payload = Buffer.from(pending.subarray(offset + 4, frameLength));
+      for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+      pending = pending.subarray(frameLength);
+      if (opcode === 0x8) { socket.end(Buffer.from([0x88, 0x00])); return; }
+      if (opcode === 0x9) { socket.write(Buffer.concat([Buffer.from([0x8a, payload.length]), payload])); continue; }
+      if (opcode !== 0x2 || payload.length !== 160) return closeWithCode(1003);
+      record.session.sendAudio(payload);
+    }
+  };
+  socket.on('data', (chunk) => { pending = Buffer.concat([pending, chunk]); processFrames(); });
+  const onClose = () => {
+    if (record.ws === socket) record.ws = null;
+    if (activeVoiceSession === record) {
+      activeVoiceSession = null;
+      record.session.stop().catch((error) => console.error(`[voice] stop after media socket close failed: ${error.message}`));
+    }
+  };
+  socket.on('close', onClose);
+  socket.on('error', onClose);
+  processFrames();
+}
+
 function acceptMediaWebSocket(req, socket, head) {
   const origin = req.headers.origin;
   let originMatchesHost = false;
   try { originMatchesHost = new URL(origin).host === req.headers.host; } catch {}
   const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  if (requestUrl.pathname === '/api/voice/media') return acceptVoiceWebSocket(req, socket, head, requestUrl);
   const record = activeSession;
   const token = requestUrl.searchParams.get('token');
   const key = req.headers['sec-websocket-key'];
