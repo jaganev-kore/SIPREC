@@ -321,8 +321,7 @@ function makeRtcpSenderReport({ ssrc, rtpTimestamp, packetCount, octetCount, cna
   return Buffer.concat([senderReport, sdes]);
 }
 
-function makeSipRequest({ transport, method, requestUri, viaHost, from, to, callId, cseq, routeHeaders = [], body = '', contentType = null, contact = null }) {
-  const branch = `z9hG4bK${crypto.randomBytes(10).toString('hex')}`;
+function makeSipRequest({ transport, method, requestUri, viaHost, from, to, callId, cseq, routeHeaders = [], body = '', contentType = null, contact = null, branch = `z9hG4bK${crypto.randomBytes(10).toString('hex')}` }) {
   const lines = [
     `${method} ${requestUri} SIP/2.0`,
     `Via: SIP/2.0/${transport} ${viaHost};branch=${branch};rport`,
@@ -426,6 +425,7 @@ export async function createSiprecSession({
   const sip = new SipConnection(socket, transport, udpRemote);
   logger(`SIP/${transport} signaling ready for ${target.host}:${target.port}`);
 
+  const inviteBranch = `z9hG4bK${crypto.randomBytes(10).toString('hex')}`;
   const invite = makeSipRequest({
     transport,
     method: 'INVITE',
@@ -435,6 +435,7 @@ export async function createSiprecSession({
     to,
     callId,
     cseq: 1,
+    branch: inviteBranch,
     contact,
     contentType: mime.contentType,
     body: mime.body,
@@ -468,6 +469,17 @@ export async function createSiprecSession({
       }
       finalResponse = response;
       if (code >= 300) {
+        sip.write(makeSipRequest({
+          transport,
+          method: 'ACK',
+          requestUri: uri,
+          viaHost: publicIp,
+          from,
+          to: response.headers.get('to') || to,
+          callId,
+          cseq: 1,
+          branch: inviteBranch,
+        }));
         const reason = response.first.replace(/^SIP\/2\.0\s+\d+\s*/, '');
         const diagnosticHeaders = ['retry-after', 'warning', 'reason', 'server']
           .map((name) => {
@@ -478,7 +490,7 @@ export async function createSiprecSession({
         const diagnostic = diagnosticHeaders.length ? ` Response details: ${diagnosticHeaders.join('; ')}.` : '';
         const authHint = code === 401 || code === 407 ? ' SIP credentials or client-certificate requirements may be missing.' : '';
         const unavailableHint = code === 503 ? ' Check whether the Kore SIPREC trunk is enabled and available, and confirm the assigned SIP URI, signaling transport, and source-IP allowlist with Kore.' : '';
-        throw new Error(`Kore rejected the SIPREC INVITE (${code} ${reason}).${diagnostic}${authHint}${unavailableHint}`);
+        throw new Error(`Kore rejected the SIPREC INVITE (${code} ${reason}). Call-ID: ${callId}.${diagnostic}${authHint}${unavailableHint}`);
       }
       break;
     }
