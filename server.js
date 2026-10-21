@@ -151,8 +151,8 @@ function probeSipTransport(target, transport, tlsOptions = {}) {
   if (!['TLS', 'TCP', 'UDP'].includes(transport)) {
     return Promise.reject(new Error(`SIP transport ${transport} is not supported. Choose UDP, TCP or TLS.`));
   }
+  if (transport !== 'TLS' && target.secure) return Promise.reject(new Error('A SIPS URI requires TLS signaling; use a SIP URI for UDP or TCP.'));
   if (transport === 'UDP') {
-    if (target.secure) return Promise.reject(new Error('A SIPS URI requires TLS signaling; use a SIP URI for UDP.'));
     return lookup(target.host).then(() => new Promise((resolveProbe, rejectProbe) => {
       const socket = dgram.createSocket('udp4');
       const timer = setTimeout(() => socket.close(() => rejectProbe(new Error('UDP socket setup timed out'))), 7000);
@@ -207,6 +207,7 @@ async function handle(req, res) {
       mediaProfile,
       mediaCodec: 'PCMU/8000',
       sipTransport,
+      sipTransports: ['TLS', 'UDP', 'TCP'],
       siprecIdentifier: typeof koreConfig.siprecIdentifier === 'string' ? koreConfig.siprecIdentifier : '',
       dtmf: typeof koreConfig.dtmf === 'string' ? koreConfig.dtmf : 'RFC2833',
       sipCredentialsConfigured: Boolean(koreConfig.sipUsername && koreConfig.sipPassword),
@@ -231,9 +232,10 @@ async function handle(req, res) {
     const body = await readJson(req);
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: 'Request body must be a JSON object.' });
     const uri = String(body.sipUri || voiceGatewayUri).trim();
+    const requestedTransport = String(body.transport || voiceGatewayTransport).trim().toUpperCase();
     const target = parseKoreSipUri(uri);
     if (!target) return json(res, 400, { error: 'Enter the Kore Voice Gateway SIP URI (a kore.ai SIP/SIPS URI on port 5060 or 5061).' });
-    if (!['UDP', 'TCP', 'TLS'].includes(voiceGatewayTransport)) return json(res, 400, { error: 'kore.voiceGatewayTransport must be UDP, TCP, or TLS.' });
+    if (!['UDP', 'TCP', 'TLS'].includes(requestedTransport)) return json(res, 400, { error: 'Voice Gateway transport must be UDP, TCP, or TLS.' });
     if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCP VM static external IPv4 address.' });
     if (!Number.isInteger(voiceGatewayRtpPort) || voiceGatewayRtpPort < 1024 || voiceGatewayRtpPort > 65534 || voiceGatewayRtpPort % 2) return json(res, 400, { error: 'media.voiceGatewayRtpPort must be an even UDP port from 1024 through 65534.' });
     const selectedSpeechLanguage = String(body.speechLanguageCode || speechLanguageCode).trim();
@@ -253,7 +255,7 @@ async function handle(req, res) {
     try {
       const session = await createVoiceGatewaySession({
         uri,
-        transport: voiceGatewayTransport,
+        transport: requestedTransport,
         publicIp: mediaPublicIp,
         rtpPort: voiceGatewayRtpPort,
         callerId: typeof koreConfig.voiceCallerId === 'string' ? koreConfig.voiceCallerId : (koreConfig.siprecIdentifier || 'web-caller'),
@@ -341,9 +343,10 @@ async function handle(req, res) {
     const endpoint = gateways.find((gateway) => gateway.id === body.endpoint);
     if (!endpoint) return json(res, 400, { error: 'Select a valid Kore SIPREC endpoint.' });
     const sipUri = String(body.sipUri || endpoint.uri || '').trim();
+    const requestedTransport = String(body.transport || sipTransport).trim().toUpperCase();
     if (!sipUri) return json(res, 400, { error: 'Paste a Kore SIPREC URI into the endpoint field.' });
     if (!parseKoreSipUri(sipUri)) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061.' });
-    if (!['TLS', 'TCP', 'UDP'].includes(sipTransport)) return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to UDP, TCP or TLS.` });
+    if (!['TLS', 'TCP', 'UDP'].includes(requestedTransport)) return json(res, 400, { error: 'SIP transport must be TLS, UDP, or TCP.' });
     if (!isIPv4(mediaPublicIp)) return json(res, 400, { error: 'Set media.publicIp in config.json to the GCE VM static external IPv4 address.' });
     if (!Number.isInteger(rtpPort) || rtpPort < 1024 || rtpPort > 65534 || rtpPort % 2 !== 0) return json(res, 400, { error: 'media.rtpPort in config.json must be an even UDP port from 1024 through 65534.' });
     if (mediaProfile !== 'RTP/AVP') {
@@ -358,7 +361,7 @@ async function handle(req, res) {
     try {
       const session = await createSiprecSession({
         uri: sipUri,
-        sipTransport,
+        sipTransport: requestedTransport,
         siprecIdentifier: typeof koreConfig.siprecIdentifier === 'string' ? koreConfig.siprecIdentifier : '',
         participantName,
         participantUri,
@@ -417,22 +420,23 @@ async function handle(req, res) {
     const gateway = gateways.find((candidate) => candidate.id === body.endpoint);
     if (!gateway) return json(res, 400, { error: 'Select a valid Kore SIPREC endpoint' });
     const sipUri = String(body.sipUri || gateway.uri || '').trim();
+    const requestedTransport = String(body.transport || sipTransport).trim().toUpperCase();
     if (!sipUri) return json(res, 400, { error: 'Paste a Kore SIPREC URI into the endpoint field' });
     const target = parseKoreSipUri(sipUri);
     if (!target) return json(res, 400, { error: 'Enter a SIP/SIPS URI for a Kore SBC on kore.ai using port 5060 or 5061' });
 
     try {
-      if (!['TLS', 'TCP', 'UDP'].includes(sipTransport)) {
-        return json(res, 400, { error: `SIP transport ${sipTransport} is not supported. Set kore.sipTransport to UDP, TCP or TLS.` });
+      if (!['TLS', 'TCP', 'UDP'].includes(requestedTransport)) {
+        return json(res, 400, { error: 'SIP transport must be TLS, UDP, or TCP.' });
       }
-      const tlsOptions = sipTransport === 'TLS' ? await loadTlsOptions() : {};
-      const result = await probeSipTransport(target, sipTransport, tlsOptions);
+      const tlsOptions = requestedTransport === 'TLS' ? await loadTlsOptions() : {};
+      const result = await probeSipTransport(target, requestedTransport, tlsOptions);
       return json(res, 200, {
         endpoint: gateway.id,
         ...result,
-        message: sipTransport === 'UDP'
+        message: requestedTransport === 'UDP'
           ? 'Kore hostname resolved and a local UDP socket opened. UDP has no connection handshake; remote reachability was not verified and no SIP packet was sent.'
-          : sipTransport === 'TLS'
+          : requestedTransport === 'TLS'
           ? 'TLS handshake succeeded. This does not send SIP signaling, SIPREC metadata, or audio.'
           : 'TCP connection succeeded. This does not send SIP signaling, SIPREC metadata, or audio.',
       });
@@ -440,10 +444,10 @@ async function handle(req, res) {
       return json(res, 502, {
         endpoint: gateway.id,
         reachable: false,
-        error: error.code || error.message || `${sipTransport} connection failed`,
-        message: sipTransport === 'TLS'
+        error: error.code || error.message || `${requestedTransport} connection failed`,
+        message: requestedTransport === 'TLS'
           ? 'Check DNS, outbound TCP/TLS, Kore IP allowlisting, TLS requirements, and the configured port.'
-          : sipTransport === 'UDP'
+          : requestedTransport === 'UDP'
             ? 'Check DNS, outbound UDP, Kore IP allowlisting, and the configured port.'
             : 'Check DNS, outbound TCP, Kore IP allowlisting, and the configured port.',
       });

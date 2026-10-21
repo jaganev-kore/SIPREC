@@ -72,6 +72,7 @@ async function endCall() {
   cleanupCall(current);
   activeCall = null;
   startButton.disabled = false;
+  document.querySelector('#voice-sip-transport').disabled = false;
   stopButton.disabled = true;
   setStatus('Voice Gateway call ended.');
   transcriptStatus.textContent = 'Call ended. Transcript remains available above.';
@@ -94,6 +95,7 @@ function handleSocketMessage(current, event) {
 
 async function startCall() {
   startButton.disabled = true;
+  document.querySelector('#voice-sip-transport').disabled = true;
   setStatus('Requesting microphone access…');
   transcriptStatus.classList.remove('failure');
   transcriptStatus.textContent = document.querySelector('#speech-enabled').checked
@@ -114,6 +116,7 @@ async function startCall() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         sipUri: document.querySelector('#voice-gateway-uri').value.trim(),
+        transport: document.querySelector('#voice-sip-transport').value,
         googleCloudProjectId: document.querySelector('#google-project-id').value.trim(),
         googleSttApiUrl: document.querySelector('#google-stt-url').value.trim(),
         googleTtsApiUrl: document.querySelector('#google-tts-url').value.trim(),
@@ -148,6 +151,7 @@ async function startCall() {
       activeCall = null;
       cleanupCall(current);
       startButton.disabled = false;
+      document.querySelector('#voice-sip-transport').disabled = false;
       stopButton.disabled = true;
       setStatus('Voice Gateway call closed.', 'failure');
       transcriptStatus.textContent = 'Call closed. Transcript remains available above.';
@@ -160,7 +164,10 @@ async function startCall() {
     if (current) {
       activeCall = current;
       await endCall();
-    } else startButton.disabled = false;
+    } else {
+      startButton.disabled = false;
+      document.querySelector('#voice-sip-transport').disabled = false;
+    }
     setStatus(error.message || 'Unable to call the Voice Gateway.', 'failure');
   }
 }
@@ -176,6 +183,7 @@ function connectMediaSocket(url) {
 
 document.querySelector('#voice-call-start').addEventListener('click', startCall);
 document.querySelector('#voice-call-stop').addEventListener('click', endCall);
+document.querySelector('#voice-sip-transport').addEventListener('change', () => saveSetting('voice-sip-transport', 'transport'));
 document.querySelector('#clear-transcript').addEventListener('click', () => {
   transcriptList.replaceChildren(Object.assign(document.createElement('li'), { className: 'transcript-empty', textContent: 'No transcript yet.' }));
 });
@@ -200,6 +208,7 @@ async function loadConfig() {
     const response = await fetch('/api/config');
     if (!response.ok) throw new Error('Could not load server configuration.');
     appConfig = await response.json();
+    loadSetting('voice-sip-transport', 'transport', appConfig.voiceGatewayTransport || 'UDP');
     loadSetting('voice-gateway-uri', 'sipUri', appConfig.voiceGatewayUri);
     loadSetting('google-project-id', 'projectId', appConfig.googleCloudProjectId);
     loadSetting('google-stt-url', 'sttApiUrl', appConfig.googleSttApiUrl || 'https://speech.googleapis.com/v1/speech:recognize');
@@ -209,7 +218,7 @@ async function loadConfig() {
     loadSetting('speech-model', 'speechModel', appConfig.speechModel || 'phone_call');
     loadSetting('tts-language', 'ttsLanguage', appConfig.voiceTtsLanguageCode || 'en-US');
     loadSetting('tts-voice', 'ttsVoice', appConfig.voiceTtsName || '');
-    setStatus(appConfig.voiceGatewayUri ? `Ready for a ${appConfig.voiceGatewayTransport} Voice Gateway call.` : 'Enter the SIP URI Kore assigned to the Voice Gateway.');
+    setStatus(appConfig.voiceGatewayUri ? `Ready for a ${document.querySelector('#voice-sip-transport').value} Voice Gateway call.` : 'Enter the SIP URI Kore assigned to the Voice Gateway.');
   } catch (error) {
     setStatus(error.message || 'Could not load server configuration.', 'failure');
   }

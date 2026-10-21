@@ -1,4 +1,4 @@
-# Kore Agent Assist SIPREC microphone test source
+# IVR testing — Kore Agent Assist SIPREC microphone test source
 
 This Node.js prototype adds a **Start SIPREC & microphone** button. The browser captures one microphone channel, converts it to PCMU/8000, and sends 20 ms audio frames to the Node service over the page's WebSocket. The service initiates a SIPREC INVITE to the configured Kore SRS over UDP, TCP, or TLS signaling and sends the microphone audio as RTP. Stop sends SIP BYE.
 
@@ -25,7 +25,7 @@ chmod 600 config.json
 npm start
 ```
 
-Set `kore.sipTransport` to the same transport selected for the Kore trunk: `UDP`, `TCP`, or `TLS`. Restart Node after changing it. The TCP check tests connection reachability and the TLS check completes a verified handshake; neither sends SIP. UDP has no connection handshake, so its check only confirms DNS resolution and local UDP socket setup; it does not verify remote reachability. `kore.tlsCaFile`, `kore.tlsCertFile`, and `kore.tlsKeyFile` apply only to TLS. Set certificate and key together, using absolute paths. TLS uses certificate verification and TLS 1.2 or newer.
+The SIPREC and Voice Gateway pages let you select `UDP`, `TCP`, or `TLS` for each test session. The SIPREC page also uses the selection for its path check. Selections are saved in the browser; `kore.sipTransport` and `kore.voiceGatewayTransport` supply each page's default when no browser choice is saved. The TCP check tests connection reachability and the TLS check completes a verified handshake; neither sends SIP. UDP has no connection handshake, so its check only confirms DNS resolution and local UDP socket setup; it does not verify remote reachability. `kore.tlsCaFile`, `kore.tlsCertFile`, and `kore.tlsKeyFile` apply only to TLS. Set certificate and key together, using absolute paths. TLS uses certificate verification and TLS 1.2 or newer.
 
 `media.profile` must remain `RTP/AVP` for this prototype. If Kore has Pad Crypto/SRTP enabled, do not start a test stream; this code does not implement SRTP.
 

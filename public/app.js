@@ -9,7 +9,21 @@ let configuredEndpoints = [];
 let serverConfig = null;
 
 function currentSipTransport() {
-  return String(serverConfig?.sipTransport || 'TLS').trim().toUpperCase();
+  return String(document.querySelector('#sip-transport')?.value || serverConfig?.sipTransport || 'TLS').trim().toUpperCase();
+}
+
+function updateTransportUi() {
+  const transport = currentSipTransport();
+  document.querySelectorAll('.probe-button[data-endpoint]').forEach((button) => { button.textContent = `Test ${transport} path`; });
+  document.querySelectorAll('.probe-result').forEach((result) => {
+    if (!result.classList.contains('success') && !result.classList.contains('failure') && result.textContent.includes('check run yet')) result.textContent = `No ${transport} check run yet.`;
+  });
+  const metaTransport = [...gatewayMeta.children].find((item) => item.querySelector('span')?.textContent === 'Transport');
+  if (metaTransport) metaTransport.querySelector('strong').textContent = transport;
+  const warning = transport === 'TLS'
+    ? 'Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
+    : `SIP signaling and SIPREC metadata use unencrypted ${transport}. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.`;
+  document.querySelector('#media-warning').textContent = warning;
 }
 
 function setConnection(ready, message) {
@@ -71,7 +85,7 @@ function buildEndpointCard(endpoint) {
       const response = await fetch('/api/probe', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ endpoint: endpoint.id, sipUri: endpoint.uri.trim() }),
+        body: JSON.stringify({ endpoint: endpoint.id, sipUri: endpoint.uri.trim(), transport }),
       });
       const data = await response.json();
       if (!response.ok || !data.reachable) throw new Error(data.message || data.error || `${transport} check failed`);
@@ -161,6 +175,7 @@ async function stopMediaSession() {
     });
   } catch {}
   startSessionButton.disabled = false;
+  document.querySelector('#sip-transport').disabled = false;
   setMediaStatus('SIPREC session stopped.');
 }
 
@@ -179,6 +194,7 @@ function connectMediaSocket(url) {
 
 async function startMediaSession() {
   startSessionButton.disabled = true;
+  document.querySelector('#sip-transport').disabled = true;
   setMediaStatus('Requesting microphone access…');
   let current;
   let pendingStream;
@@ -199,6 +215,7 @@ async function startMediaSession() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         endpoint: document.querySelector('#session-endpoint').value,
+        transport: currentSipTransport(),
         sipUri: endpointForId(document.querySelector('#session-endpoint').value)?.uri || '',
         participantName: document.querySelector('#participant-name').value,
         participantUri: document.querySelector('#participant-uri').value,
@@ -231,6 +248,7 @@ async function startMediaSession() {
       if (current.audioContext.state !== 'closed') current.audioContext.close();
       activeMediaSession = null;
       startSessionButton.disabled = false;
+      document.querySelector('#sip-transport').disabled = false;
       stopSessionButton.disabled = true;
       setMediaStatus('Media connection closed. The Kore SIPREC session may have ended; start a new test to reconnect.', 'failure');
     });
@@ -243,6 +261,7 @@ async function startMediaSession() {
       pendingStream?.getTracks().forEach((track) => track.stop());
       if (pendingAudioContext && pendingAudioContext.state !== 'closed') await pendingAudioContext.close();
       startSessionButton.disabled = false;
+      document.querySelector('#sip-transport').disabled = false;
       setMediaStatus(error.message || 'Unable to start the SIPREC test session.', 'failure');
     }
   }
@@ -251,6 +270,10 @@ async function startMediaSession() {
 startSessionButton.addEventListener('click', startMediaSession);
 stopSessionButton.addEventListener('click', stopMediaSession);
 document.querySelector('#session-endpoint').addEventListener('change', updateEndpointReadiness);
+document.querySelector('#sip-transport').addEventListener('change', () => {
+  try { localStorage.setItem('kore-siprec-transport', currentSipTransport()); } catch {}
+  updateTransportUi();
+});
 
 async function loadConfig() {
   try {
@@ -258,12 +281,12 @@ async function loadConfig() {
     if (!response.ok) throw new Error('Configuration endpoint is unavailable.');
     const config = await response.json();
     serverConfig = config;
-    document.querySelector('#transport-label').textContent = currentSipTransport();
-    document.querySelector('#media-warning').textContent = currentSipTransport() === 'TCP'
-      ? 'SIP signaling and SIPREC metadata use unencrypted TCP. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
-      : currentSipTransport() === 'UDP'
-        ? 'SIP signaling and SIPREC metadata use unencrypted UDP. This prototype also streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.'
-        : 'Signaling uses TLS. This prototype streams unencrypted RTP/PCMU media and one audio direction. Use only non-sensitive test speech until Kore confirms the required crypto, codecs, and stream metadata. SIPREC sends audio to Agent Assist; it does not return a spoken Kore response.';
+    const transportSelect = document.querySelector('#sip-transport');
+    let savedTransport = '';
+    try { savedTransport = localStorage.getItem('kore-siprec-transport') || ''; } catch {}
+    const transports = config.sipTransports || ['TLS', 'UDP', 'TCP'];
+    const configuredTransport = String(config.sipTransport || 'TLS').toUpperCase();
+    transportSelect.value = transports.includes(savedTransport) ? savedTransport : (transports.includes(configuredTransport) ? configuredTransport : 'TLS');
     configuredEndpoints = config.endpoints.map((endpoint) => {
       let uri = endpoint.uri || '';
       try {
@@ -301,6 +324,7 @@ async function loadConfig() {
       item.append(caption, content);
       return item;
     }));
+    updateTransportUi();
 
   } catch (error) {
     endpointsContainer.textContent = error.message || 'Unable to load Kore endpoint configuration.';

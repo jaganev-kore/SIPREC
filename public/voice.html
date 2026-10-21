@@ -4,15 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>SignalDesk • Two-way Voice</title>
+    <title>IVR testing • Two-way voice</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/voice-app.js" defer></script>
   </head>
   <body>
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="/" aria-label="IVR testing home"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>IVR <span class="brand-light">testing</span></span></a>
+      <div class="nav-heading">PAGES</div>
+      <nav class="side-nav"><a class="side-nav-link" href="/"><span class="nav-icon">◉</span>SIPREC test</a><a class="side-nav-link active" href="/voice.html" aria-current="page"><span class="nav-icon">◖</span>Two-way voice</a></nav>
+      <div class="sidebar-foot">KORE VOICE / SIPREC</div>
+    </aside>
     <main class="shell">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="SIPREC home"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>Signal<span class="brand-light">Desk</span></span></a>
-        <div class="topbar-meta"><span class="environment"><span class="environment-dot"></span> KORE VOICE GATEWAY</span><a class="page-link" href="/">SIPREC page</a></div>
+        <div class="topbar-meta"><span class="environment"><span class="environment-dot"></span> IVR TESTING / VOICE GATEWAY</span></div>
       </header>
 
       <section class="hero">
@@ -25,6 +30,7 @@
         <div class="panel-heading"><div><div class="panel-kicker">VOICE GATEWAY SIP CALL</div><h2 id="voice-call-title">Call controls</h2></div><div class="record-indicator"><span></span> PCMU / 8000</div></div>
         <div class="voice-gateway-form">
           <label>Kore Voice Gateway SIP URL<input id="voice-gateway-uri" type="text" autocomplete="off" spellcheck="false" placeholder="sip:assigned-id@gateway.kore.ai:5060" /></label>
+          <label>SIP transport<select id="voice-sip-transport"><option value="TLS">TLS</option><option value="UDP">UDP</option><option value="TCP">TCP</option></select></label>
         </div>
         <div class="media-controls">
           <button class="start-button" id="voice-call-start" type="button">Call Voice Gateway</button>

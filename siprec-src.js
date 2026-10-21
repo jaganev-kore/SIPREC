@@ -373,7 +373,7 @@ export async function createSiprecSession({
     throw new Error('media.rtpPort in config.json must be an even UDP port from 1024 through 65534.');
   }
   const target = parseSipUri(uri);
-  if (transport === 'UDP' && target.secure) throw new Error('A SIPS URI requires TLS signaling; use a SIP URI for UDP.');
+  if (transport !== 'TLS' && target.secure) throw new Error('A SIPS URI requires TLS signaling; use a SIP URI for UDP or TCP.');
   const tlsFiles = transport === 'TLS' ? await loadTlsFiles({ caFile, certFile, keyFile }) : {};
   const startedAt = new Date();
   const callId = `${crypto.randomUUID()}@${publicIp}`;
